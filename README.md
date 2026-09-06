@@ -33,11 +33,14 @@ cd /Users/s-ikari/work/webapp-obsidian
 npm run dev
 ```
 
-ブラウザで `http://localhost:3000` を開きます。
+ブラウザで `http://localhost:3333` を開きます。
 
 ---
 
 ## ☁️ Cloudflare Pages へのデプロイ手順（完全無料）
+
+📖 **スクショ不要で迷わず完了する詳細手順書**:
+👉 [Cloudflare Pages デプロイ＆初期セットアップ完全ガイド](docs/DEPLOY_TO_CLOUDFLARE_PAGES.md)
 
 1. **GitHub に本リポジトリ（`webapp-obsidian`）を push**:
    ```bash
