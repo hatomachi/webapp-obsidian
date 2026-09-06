@@ -1,0 +1,17 @@
+{
+  "name": "Obsidian Web App",
+  "short_name": "Obsidian",
+  "description": "Lightweight Obsidian Mobile Web Viewer and Editor with GitHub API and Cloudflare Pages",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#161618",
+  "theme_color": "#161618",
+  "icons": [
+    {
+      "src": "/obsidian.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
