@@ -4,6 +4,7 @@
 
 作業を開始する際は、必ず本ドキュメントおよび [`docs/ARCHITECTURE_AND_CONCEPT.md`](docs/ARCHITECTURE_AND_CONCEPT.md) を前提として行動してください。
 
+
 ---
 
 ## 1. 🎯 プロジェクトの存在理由と開発動機
