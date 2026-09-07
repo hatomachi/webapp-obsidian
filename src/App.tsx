@@ -288,15 +288,31 @@ export const App: React.FC = () => {
   // Toggle interactive task in viewer (hybrid local toggle: no immediate git commit)
   const handleToggleTask = (
     lineIndex: number,
-    _lineText: string,
+    lineText: string,
     checked: boolean
   ) => {
     const lines = content.split('\n');
-    if (lines[lineIndex] !== undefined) {
-      const line = lines[lineIndex];
-      lines[lineIndex] = checked
-        ? line.replace(/-\s*\[\s*\]/, '- [x]')
-        : line.replace(/-\s*\[x\]/i, '- [ ]');
+    let targetIndex = lineIndex;
+
+    // Verify if lines[targetIndex] matches the expected task line
+    if (
+      lines[targetIndex] === undefined ||
+      !/^\s*[-*+]\s*\[[ xX]\]/.test(lines[targetIndex]) ||
+      lines[targetIndex].trim() !== lineText.trim()
+    ) {
+      // Fallback: Find matching line by text
+      const found = lines.findIndex((l) => l.trim() === lineText.trim());
+      if (found !== -1) {
+        targetIndex = found;
+      }
+    }
+
+    if (lines[targetIndex] !== undefined) {
+      const line = lines[targetIndex];
+      lines[targetIndex] = line.replace(
+        /^(\s*[-*+]\s*\[)[ xX](\]\s*.*)$/,
+        checked ? '$1x$2' : '$1 $2'
+      );
       setContent(lines.join('\n'));
     }
   };

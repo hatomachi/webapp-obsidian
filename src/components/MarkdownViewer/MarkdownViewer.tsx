@@ -227,7 +227,8 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
           },
 
           // Interactive Checkboxes
-          input({ type, checked, ...props }) {
+          input(props) {
+            const { type, checked, disabled, readOnly, node, ...rest } = props as any;
             if (type === 'checkbox') {
               const currentTaskIndex = taskRenderIndexRef.current++;
               const taskMeta = taskMetaList[currentTaskIndex];
@@ -235,18 +236,19 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
               return (
                 <input
                   type="checkbox"
-                  checked={checked}
+                  checked={!!checked}
+                  disabled={false}
                   onChange={(e) => {
                     if (taskMeta && onToggleTask) {
                       onToggleTask(taskMeta.lineIndex, taskMeta.lineText, e.target.checked);
                     }
                   }}
                   className="w-[18px] h-[18px] mr-2.5 rounded border-zinc-600 bg-zinc-800 text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 cursor-pointer accent-purple-600 align-middle -mt-0.5 transition-transform active:scale-125 shrink-0"
-                  {...props}
+                  {...rest}
                 />
               );
             }
-            return <input type={type} {...props} />;
+            return <input type={type} {...rest} />;
           },
 
           // Tables
