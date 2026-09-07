@@ -124,21 +124,98 @@ export const App: React.FC = () => {
     return paths;
   }, [fileTree]);
 
+  // Map of filePath -> SHA from current fileTree
+  const fileShaMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const traverse = (nodes: FileNode[]) => {
+      for (const node of nodes) {
+        if (node.type === 'blob' && node.sha) {
+          map.set(node.path, node.sha);
+        }
+        if (node.children) traverse(node.children);
+      }
+    };
+    traverse(fileTree);
+    return map;
+  }, [fileTree]);
+
+  // Load a specific markdown file with SWR (Stale-While-Revalidate)
+  const loadFileContent = useCallback(
+    async (
+      vault: VaultConfig,
+      path: string,
+      targetSha?: string,
+      force: boolean = false
+    ) => {
+      setActiveFilePath(path);
+      localStorage.setItem(`webapp_obsidian_last_file_${vault.id}`, path);
+
+      // SWR: 即座にローカルキャッシュを描画（0秒起動・画面遷移）
+      const cached = GitHubService.getCachedContent(vault, path);
+      if (cached && !force) {
+        setContent(cached.content);
+        setInitialContent(cached.content);
+        setCurrentSha(cached.sha);
+      } else {
+        setIsLoading(true);
+      }
+
+      setError(null);
+
+      try {
+        const expectedSha = targetSha || fileShaMap.get(path);
+
+        // キャッシュが存在し、SHAが最新と一致し、強制リフレッシュでない場合は再取得不要
+        if (cached && expectedSha && cached.sha === expectedSha && !force) {
+          setIsLoading(false);
+          return;
+        }
+
+        // GitHub API から最新コンテンツを取得（キャッシュなし、SHA不一致、または強制取得時）
+        const res = await GitHubService.fetchFileContent(vault, path, {
+          fileSha: expectedSha,
+          force,
+        });
+
+        setContent(res.content);
+        setInitialContent(res.content);
+        setCurrentSha(res.sha);
+
+        // キャッシュから更新された場合、控えめにトースト通知
+        if (cached && cached.sha !== res.sha) {
+          showToast('ノートを最新に更新しました', 'info');
+        }
+      } catch (e: any) {
+        console.error('Failed to load file:', e);
+        if (!cached) {
+          setError(`ファイル "${path}" の読み込みに失敗しました: ${e.message}`);
+        } else {
+          showToast('最新データの取得に失敗しました（キャッシュを表示中）', 'error');
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [fileShaMap]
+  );
+
   // Fetch File Tree for active vault
   const loadFileTree = useCallback(
-    async (vault: VaultConfig) => {
+    async (vault: VaultConfig, force: boolean = false) => {
       try {
         setIsRefreshing(true);
         setError(null);
-        const tree = await GitHubService.fetchFileTree(vault);
+        const tree = await GitHubService.fetchFileTree(vault, force);
         setFileTree(tree);
 
-        // Find initial file to open
+        // Extract file paths and sha mapping
         const paths: string[] = [];
+        const shaMap = new Map<string, string>();
         const traverse = (nodes: FileNode[]) => {
           for (const node of nodes) {
             if (node.type === 'blob' && node.path.endsWith('.md')) {
               paths.push(node.path);
+              if (node.sha) shaMap.set(node.path, node.sha);
             }
             if (node.children) traverse(node.children);
           }
@@ -148,14 +225,17 @@ export const App: React.FC = () => {
         const lastFileKey = `webapp_obsidian_last_file_${vault.id}`;
         const lastFile = localStorage.getItem(lastFileKey);
 
-        if (lastFile && paths.includes(lastFile)) {
-          loadFileContent(vault, lastFile);
-        } else if (paths.length > 0) {
-          // Prefer INDEX.md or README.md if available
-          const indexFile =
-            paths.find((p) => p.toLowerCase().includes('index') || p.toLowerCase().includes('readme')) ||
-            paths[0];
-          loadFileContent(vault, indexFile);
+        const currentTarget = activeFilePath && paths.includes(activeFilePath) ? activeFilePath : null;
+        const targetFile =
+          currentTarget ||
+          (lastFile && paths.includes(lastFile) ? lastFile : null) ||
+          (paths.length > 0
+            ? paths.find((p) => p.toLowerCase().includes('index') || p.toLowerCase().includes('readme')) || paths[0]
+            : null);
+
+        if (targetFile) {
+          const expectedSha = shaMap.get(targetFile);
+          await loadFileContent(vault, targetFile, expectedSha, force);
         } else {
           setActiveFilePath('');
           setContent('# ノートがありません\n\nこのVaultにはMarkdownファイルが見つかりませんでした。');
@@ -167,8 +247,24 @@ export const App: React.FC = () => {
         setIsRefreshing(false);
       }
     },
-    []
+    [activeFilePath, loadFileContent]
   );
+
+  // Fast initial cache render on startup (0-second load before network completes)
+  useEffect(() => {
+    if (!activeVault) return;
+    const lastFileKey = `webapp_obsidian_last_file_${activeVault.id}`;
+    const lastFile = localStorage.getItem(lastFileKey);
+    if (lastFile && !content) {
+      const cached = GitHubService.getCachedContent(activeVault, lastFile);
+      if (cached) {
+        setActiveFilePath(lastFile);
+        setContent(cached.content);
+        setInitialContent(cached.content);
+        setCurrentSha(cached.sha);
+      }
+    }
+  }, [activeVault]);
 
   // Load active vault tree on change
   useEffect(() => {
@@ -177,25 +273,27 @@ export const App: React.FC = () => {
     }
   }, [activeVault, loadFileTree]);
 
-  // Load a specific markdown file
-  const loadFileContent = useCallback(async (vault: VaultConfig, path: string) => {
-    setIsLoading(true);
-    setError(null);
-    setActiveFilePath(path);
-    localStorage.setItem(`webapp_obsidian_last_file_${vault.id}`, path);
+  // Auto-revalidate on visibility change (when returning from background or switching apps on iOS PWA)
+  const lastRevalidateRef = React.useRef<number>(Date.now());
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && activeVault) {
+        const now = Date.now();
+        // Avoid spamming if user rapidly switches apps (10s throttle)
+        if (now - lastRevalidateRef.current > 10000) {
+          lastRevalidateRef.current = now;
+          loadFileTree(activeVault);
+        }
+      }
+    };
 
-    try {
-      const res = await GitHubService.fetchFileContent(vault, path);
-      setContent(res.content);
-      setInitialContent(res.content);
-      setCurrentSha(res.sha);
-    } catch (e: any) {
-      console.error('Failed to load file:', e);
-      setError(`ファイル "${path}" の読み込みに失敗しました: ${e.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [activeVault, loadFileTree]);
 
   // Checklist stats and pending changes calculation
   const taskStats = useMemo(() => {
@@ -258,9 +356,12 @@ export const App: React.FC = () => {
           return;
         }
       }
-      if (activeVault) loadFileContent(activeVault, path);
+      if (activeVault) {
+        const expectedSha = fileShaMap.get(path);
+        loadFileContent(activeVault, path, expectedSha);
+      }
     },
-    [activeVault, loadFileContent, taskStats.pendingChanges]
+    [activeVault, fileShaMap, loadFileContent, taskStats.pendingChanges]
   );
 
   // Note Navigation History & Recents Hook
@@ -488,9 +589,9 @@ export const App: React.FC = () => {
         onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
         onOpenEditModal={() => setIsEditModalOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onRefresh={() => {
+        onRefresh={async () => {
           if (activeVault) {
-            loadFileTree(activeVault);
+            await loadFileTree(activeVault, true);
             showToast('最新データを取得しました', 'success');
           }
         }}
@@ -505,7 +606,7 @@ export const App: React.FC = () => {
               activeFilePath={activeFilePath}
               allFilePaths={allFilePaths}
               onSelectFile={(path) => {
-                if (activeVault) loadFileContent(activeVault, path);
+                safeNavigateFile(path);
               }}
             />
           )}

@@ -65,15 +65,34 @@ export class GitHubService {
   }
 
   /**
+   * Get cached content immediately from localStorage for SWR initial rendering
+   */
+  static getCachedContent(vault: VaultConfig, filePath: string): FileCacheEntry | null {
+    const cache = this.getLocalCache(vault);
+    return cache[filePath] || null;
+  }
+
+  /**
    * Fetch file tree recursively using Git Trees API
    */
-  static async fetchFileTree(vault: VaultConfig): Promise<FileNode[]> {
+  static async fetchFileTree(vault: VaultConfig, force: boolean = false): Promise<FileNode[]> {
     const octokit = this.getOctokit(vault.token);
+    
+    // Prevent iOS Safari / CDN aggressive caching
+    const requestHeaders: Record<string, string> = {
+      'If-None-Match': '',
+    };
+    if (force) {
+      requestHeaders['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      requestHeaders['Pragma'] = 'no-cache';
+    }
+
     const { data } = await octokit.git.getTree({
       owner: vault.owner,
       repo: vault.repo,
       tree_sha: vault.branch || 'main',
       recursive: 'true',
+      headers: requestHeaders,
     });
 
     const ignoredPrefixes = ['.obsidian/', '.git/', '.github/', '.vscode/', '.trash/'];
@@ -152,13 +171,20 @@ export class GitHubService {
   static async fetchFileContent(
     vault: VaultConfig,
     filePath: string,
-    fileSha?: string
+    options?: {
+      fileSha?: string;
+      force?: boolean;
+    }
   ): Promise<{ content: string; sha: string; fromCache: boolean }> {
+    const { fileSha, force = false } = options || {};
     const cache = this.getLocalCache(vault);
     const cachedEntry = cache[filePath];
 
-    // If cache matches the SHA, return immediately
-    if (cachedEntry && (!fileSha || cachedEntry.sha === fileSha)) {
+    // Only return from cache if:
+    // 1. Not a force refresh
+    // 2. Cache exists
+    // 3. fileSha is provided AND matches the cached sha
+    if (!force && cachedEntry && fileSha && cachedEntry.sha === fileSha) {
       return {
         content: cachedEntry.content,
         sha: cachedEntry.sha,
@@ -166,13 +192,22 @@ export class GitHubService {
       };
     }
 
-    // Fetch from GitHub
+    // Fetch from GitHub with cache-busting headers
     const octokit = this.getOctokit(vault.token);
+    const requestHeaders: Record<string, string> = {
+      'If-None-Match': '',
+    };
+    if (force) {
+      requestHeaders['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      requestHeaders['Pragma'] = 'no-cache';
+    }
+
     const { data } = await octokit.repos.getContent({
       owner: vault.owner,
       repo: vault.repo,
       path: filePath,
       ref: vault.branch || 'main',
+      headers: requestHeaders,
     });
 
     if (Array.isArray(data) || !('content' in data)) {
@@ -209,7 +244,7 @@ export class GitHubService {
     const octokit = this.getOctokit(vault.token);
 
     // Get latest content
-    const { content, sha } = await this.fetchFileContent(vault, filePath);
+    const { content, sha } = await this.fetchFileContent(vault, filePath, { force: true });
     const lines = content.split('\n');
 
     // Find the matching line (prefer exact index, or search nearby)
@@ -282,7 +317,7 @@ export class GitHubService {
 
     let sha = currentSha;
     if (!sha) {
-      const existing = await this.fetchFileContent(vault, filePath);
+      const existing = await this.fetchFileContent(vault, filePath, { force: true });
       sha = existing.sha;
     }
 
