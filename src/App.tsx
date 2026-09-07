@@ -41,6 +41,7 @@ export const App: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isSavingTasks, setIsSavingTasks] = useState<boolean>(false);
+  const taskStatsRef = React.useRef({ total: 0, completed: 0, pendingChanges: 0 });
 
   // Quick Append Input State
   const [quickNoteText, setQuickNoteText] = useState('');
@@ -124,20 +125,12 @@ export const App: React.FC = () => {
     return paths;
   }, [fileTree]);
 
-  // Map of filePath -> SHA from current fileTree
-  const fileShaMap = useMemo(() => {
-    const map = new Map<string, string>();
-    const traverse = (nodes: FileNode[]) => {
-      for (const node of nodes) {
-        if (node.type === 'blob' && node.sha) {
-          map.set(node.path, node.sha);
-        }
-        if (node.children) traverse(node.children);
-      }
-    };
-    traverse(fileTree);
-    return map;
-  }, [fileTree]);
+  // Stable references for state to prevent callback recreation & infinite loops
+  const fileShaMapRef = React.useRef<Map<string, string>>(new Map());
+  const activeVaultRef = React.useRef<VaultConfig | null>(activeVault);
+  activeVaultRef.current = activeVault;
+  const activeFilePathRef = React.useRef<string>(activeFilePath);
+  activeFilePathRef.current = activeFilePath;
 
   // Load a specific markdown file with SWR (Stale-While-Revalidate)
   const loadFileContent = useCallback(
@@ -147,7 +140,13 @@ export const App: React.FC = () => {
       targetSha?: string,
       force: boolean = false
     ) => {
+      // If user is actively toggling checklist items, do not overwrite silently in background
+      if (taskStatsRef.current.pendingChanges > 0 && !force) {
+        return;
+      }
+
       setActiveFilePath(path);
+      activeFilePathRef.current = path;
       localStorage.setItem(`webapp_obsidian_last_file_${vault.id}`, path);
 
       // SWR: 即座にローカルキャッシュを描画（0秒起動・画面遷移）
@@ -163,7 +162,7 @@ export const App: React.FC = () => {
       setError(null);
 
       try {
-        const expectedSha = targetSha || fileShaMap.get(path);
+        const expectedSha = targetSha || fileShaMapRef.current.get(path);
 
         // キャッシュが存在し、SHAが最新と一致し、強制リフレッシュでない場合は再取得不要
         if (cached && expectedSha && cached.sha === expectedSha && !force) {
@@ -176,6 +175,12 @@ export const App: React.FC = () => {
           fileSha: expectedSha,
           force,
         });
+
+        // フェッチ完了時にも未保存タスクがあれば上書きしない
+        if (taskStatsRef.current.pendingChanges > 0 && !force) {
+          setIsLoading(false);
+          return;
+        }
 
         setContent(res.content);
         setInitialContent(res.content);
@@ -196,7 +201,7 @@ export const App: React.FC = () => {
         setIsLoading(false);
       }
     },
-    [fileShaMap]
+    []
   );
 
   // Fetch File Tree for active vault
@@ -222,10 +227,13 @@ export const App: React.FC = () => {
         };
         traverse(tree);
 
+        fileShaMapRef.current = shaMap;
+
         const lastFileKey = `webapp_obsidian_last_file_${vault.id}`;
         const lastFile = localStorage.getItem(lastFileKey);
 
-        const currentTarget = activeFilePath && paths.includes(activeFilePath) ? activeFilePath : null;
+        const currentPath = activeFilePathRef.current;
+        const currentTarget = currentPath && paths.includes(currentPath) ? currentPath : null;
         const targetFile =
           currentTarget ||
           (lastFile && paths.includes(lastFile) ? lastFile : null) ||
@@ -238,6 +246,7 @@ export const App: React.FC = () => {
           await loadFileContent(vault, targetFile, expectedSha, force);
         } else {
           setActiveFilePath('');
+          activeFilePathRef.current = '';
           setContent('# ノートがありません\n\nこのVaultにはMarkdownファイルが見つかりませんでした。');
         }
       } catch (e: any) {
@@ -247,7 +256,7 @@ export const App: React.FC = () => {
         setIsRefreshing(false);
       }
     },
-    [activeFilePath, loadFileContent]
+    [loadFileContent]
   );
 
   // Fast initial cache render on startup (0-second load before network completes)
@@ -259,30 +268,42 @@ export const App: React.FC = () => {
       const cached = GitHubService.getCachedContent(activeVault, lastFile);
       if (cached) {
         setActiveFilePath(lastFile);
+        activeFilePathRef.current = lastFile;
         setContent(cached.content);
         setInitialContent(cached.content);
         setCurrentSha(cached.sha);
       }
     }
-  }, [activeVault]);
+  }, [activeVaultId]);
 
-  // Load active vault tree on change
+  // Load active vault tree on change (ONLY when activeVaultId changes)
   useEffect(() => {
     if (activeVault) {
       loadFileTree(activeVault);
     }
-  }, [activeVault, loadFileTree]);
+  }, [activeVaultId, loadFileTree]);
 
   // Auto-revalidate on visibility change (when returning from background or switching apps on iOS PWA)
   const lastRevalidateRef = React.useRef<number>(Date.now());
+  const isRevalidatingRef = React.useRef<boolean>(false);
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && activeVault) {
+    const handleVisibilityChange = async () => {
+      if (
+        document.visibilityState === 'visible' &&
+        activeVaultRef.current &&
+        !isRevalidatingRef.current &&
+        taskStatsRef.current.pendingChanges === 0
+      ) {
         const now = Date.now();
-        // Avoid spamming if user rapidly switches apps (10s throttle)
-        if (now - lastRevalidateRef.current > 10000) {
+        // Avoid spamming if user rapidly switches apps (15s throttle)
+        if (now - lastRevalidateRef.current > 15000) {
           lastRevalidateRef.current = now;
-          loadFileTree(activeVault);
+          isRevalidatingRef.current = true;
+          try {
+            await loadFileTree(activeVaultRef.current);
+          } finally {
+            isRevalidatingRef.current = false;
+          }
         }
       }
     };
@@ -293,7 +314,7 @@ export const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleVisibilityChange);
     };
-  }, [activeVault, loadFileTree]);
+  }, [loadFileTree]);
 
   // Checklist stats and pending changes calculation
   const taskStats = useMemo(() => {
@@ -345,23 +366,25 @@ export const App: React.FC = () => {
       pendingChanges = 1;
     }
 
-    return { total, completed, pendingChanges };
+    const stats = { total, completed, pendingChanges };
+    taskStatsRef.current = stats;
+    return stats;
   }, [content, initialContent]);
 
   // Safe navigation that guards against discarding uncommitted checklist changes
   const safeNavigateFile = useCallback(
     (path: string) => {
-      if (taskStats.pendingChanges > 0) {
+      if (taskStatsRef.current.pendingChanges > 0) {
         if (!window.confirm('未保存のチェック変更があります。破棄して移動しますか？')) {
           return;
         }
       }
-      if (activeVault) {
-        const expectedSha = fileShaMap.get(path);
-        loadFileContent(activeVault, path, expectedSha);
+      if (activeVaultRef.current) {
+        const expectedSha = fileShaMapRef.current.get(path);
+        loadFileContent(activeVaultRef.current, path, expectedSha);
       }
     },
-    [activeVault, fileShaMap, loadFileContent, taskStats.pendingChanges]
+    [loadFileContent]
   );
 
   // Note Navigation History & Recents Hook
