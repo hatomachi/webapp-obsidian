@@ -33,3 +33,10 @@ export interface SearchResult {
   name: string;
   dir: string;
 }
+
+export interface UIPreferences {
+  enableDesktopSidebar: boolean;
+  enableBreadcrumbs: boolean;
+  enableRecentNotes: boolean;
+  enableFooterNav: boolean;
+}

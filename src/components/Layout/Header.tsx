@@ -24,6 +24,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onRefresh: () => void;
   isRefreshing?: boolean;
+  isSidebarOpen?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onRefresh,
   isRefreshing = false,
+  isSidebarOpen = false,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -60,8 +62,13 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           type="button"
           onClick={onOpenSidebar}
-          aria-label="Open file tree"
-          className="p-2 rounded-lg text-zinc-300 hover:text-white hover:bg-obsidian-hover active:scale-95 transition-all"
+          aria-label="Toggle file tree"
+          title={isSidebarOpen ? 'サイドバーを閉じる' : 'サイドバーを開く'}
+          className={`p-2 rounded-lg transition-all active:scale-95 ${
+            isSidebarOpen
+              ? 'text-purple-300 bg-purple-950/40 border border-purple-800/50'
+              : 'text-zinc-300 hover:text-white hover:bg-obsidian-hover'
+          }`}
         >
           <Menu className="w-5 h-5" />
         </button>

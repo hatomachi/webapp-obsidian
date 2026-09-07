@@ -8,10 +8,22 @@ import { SettingsModal } from './components/Modals/SettingsModal';
 import { MarkdownViewer } from './components/MarkdownViewer/MarkdownViewer';
 import { VaultManager } from './services/VaultManager';
 import { GitHubService } from './services/GitHubService';
-import { VaultConfig, FileNode } from './types';
+import { VaultConfig, FileNode, UIPreferences } from './types';
 import { extractTOC } from './utils/markdownUtils';
 import { extractTitle } from './utils/encoding';
+import { FileTreeContent } from './components/Drawers/FileTreeContent';
+import { BreadcrumbNav } from './components/Navigation/BreadcrumbNav';
+import { RecentNotesBar } from './components/Navigation/RecentNotesBar';
+import { FolderSiblingNav } from './components/Navigation/FolderSiblingNav';
+import { useNoteHistory } from './hooks/useNoteHistory';
 import { Loader2, AlertCircle, Plus, Send, Check } from 'lucide-react';
+
+const DEFAULT_UI_PREFS: UIPreferences = {
+  enableDesktopSidebar: true,
+  enableBreadcrumbs: true,
+  enableRecentNotes: true,
+  enableFooterNav: true,
+};
 
 export const App: React.FC = () => {
   // Vaults State
@@ -34,8 +46,32 @@ export const App: React.FC = () => {
   // Toast State
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
 
+  // UI Preferences State
+  const [uiPrefs, setUiPrefs] = useState<UIPreferences>(() => {
+    try {
+      const saved = localStorage.getItem('webapp_obsidian_ui_preferences');
+      if (saved) {
+        return { ...DEFAULT_UI_PREFS, ...JSON.parse(saved) };
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_UI_PREFS;
+  });
+
+  const handleUpdateUIPrefs = (prefs: UIPreferences) => {
+    setUiPrefs(prefs);
+    try {
+      localStorage.setItem('webapp_obsidian_ui_preferences', JSON.stringify(prefs));
+    } catch (e) {
+      console.error('Failed to save UI preferences', e);
+    }
+  };
+
   // Modals & Drawers
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    return typeof window !== 'undefined' && window.innerWidth >= 768;
+  });
   const [isTOCOpen, setIsTOCOpen] = useState<boolean>(false);
   const [isQuickSwitcherOpen, setIsQuickSwitcherOpen] = useState<boolean>(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
@@ -139,7 +175,7 @@ export const App: React.FC = () => {
   }, [activeVault, loadFileTree]);
 
   // Load a specific markdown file
-  const loadFileContent = async (vault: VaultConfig, path: string) => {
+  const loadFileContent = useCallback(async (vault: VaultConfig, path: string) => {
     setIsLoading(true);
     setError(null);
     setActiveFilePath(path);
@@ -155,7 +191,19 @@ export const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  // Note Navigation History & Recents Hook
+  const { recentNotes, canGoBack, canGoForward, goBack, goForward } = useNoteHistory(
+    activeVaultId,
+    activeFilePath,
+    useCallback(
+      (path: string) => {
+        if (activeVault) loadFileContent(activeVault, path);
+      },
+      [activeVault, loadFileContent]
+    )
+  );
 
   // Switch vault
   const handleSelectVault = (vaultId: string) => {
@@ -293,7 +341,7 @@ export const App: React.FC = () => {
   }, [content, activeFilePath]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-obsidian-bg text-obsidian-text">
+    <div className="flex flex-col h-screen overflow-hidden bg-obsidian-bg text-obsidian-text">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full shadow-2xl text-xs font-medium backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-150 border border-zinc-700/80 bg-zinc-900/90 text-white">
@@ -310,7 +358,8 @@ export const App: React.FC = () => {
         activeVault={activeVault}
         currentTitle={currentTitle}
         onSelectVault={handleSelectVault}
-        onOpenSidebar={() => setIsSidebarOpen(true)}
+        onOpenSidebar={() => setIsSidebarOpen((prev) => !prev)}
+        isSidebarOpen={isSidebarOpen}
         onOpenTOC={() => setIsTOCOpen(true)}
         onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
         onOpenEditModal={() => setIsEditModalOpen(true)}
@@ -324,49 +373,112 @@ export const App: React.FC = () => {
         isRefreshing={isRefreshing}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto pb-20">
-        {error && (
-          <div className="m-4 p-3 bg-rose-950/40 border border-rose-800 rounded-xl flex items-center gap-3 text-xs text-rose-300">
-            <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
-            <div className="flex-1">{error}</div>
-          </div>
+      {/* Navigation Sub-bars (Breadcrumbs & Recent Notes) */}
+      {activeVault && activeFilePath && (
+        <div className="shrink-0 z-20">
+          {uiPrefs.enableBreadcrumbs && (
+            <BreadcrumbNav
+              activeFilePath={activeFilePath}
+              allFilePaths={allFilePaths}
+              onSelectFile={(path) => {
+                if (activeVault) loadFileContent(activeVault, path);
+              }}
+            />
+          )}
+          {uiPrefs.enableRecentNotes && (
+            <RecentNotesBar
+              recentNotes={recentNotes}
+              activeFilePath={activeFilePath}
+              canGoBack={canGoBack}
+              canGoForward={canGoForward}
+              onGoBack={goBack}
+              onGoForward={goForward}
+              onSelectFile={(path) => {
+                if (activeVault) loadFileContent(activeVault, path);
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Body Area: PC Split View (Sidebar + Main Content) */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Desktop Permanent Sidebar */}
+        {uiPrefs.enableDesktopSidebar && isSidebarOpen && (
+          <aside className="hidden md:flex flex-col w-64 lg:w-72 bg-obsidian-sidebar border-r border-obsidian-border shrink-0 animate-in slide-in-from-left duration-150">
+            <div className="flex-1 overflow-hidden">
+              <FileTreeContent
+                fileTree={fileTree}
+                activeFilePath={activeFilePath}
+                onSelectFile={(path) => {
+                  if (activeVault) loadFileContent(activeVault, path);
+                }}
+              />
+            </div>
+            <div className="p-2.5 border-t border-obsidian-border bg-zinc-900/40 text-[11px] text-zinc-500 truncate flex items-center justify-between">
+              <span>{allFilePaths.length} 件のノート</span>
+              <span className="text-[10px] text-zinc-600 font-mono">PC 2-Pane</span>
+            </div>
+          </aside>
         )}
 
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-24 text-zinc-500 gap-3">
-            <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
-            <span className="text-xs">ノートを読み込み中...</span>
-          </div>
-        ) : !activeVault ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center px-4">
-            <div className="w-16 h-16 rounded-2xl bg-purple-600/20 flex items-center justify-center mb-4 border border-purple-500/30">
-              <Plus className="w-8 h-8 text-purple-400" />
+        {/* Main Content Scroll Area */}
+        <main className="flex-1 overflow-y-auto pb-24">
+          {error && (
+            <div className="m-4 p-3 bg-rose-950/40 border border-rose-800 rounded-xl flex items-center gap-3 text-xs text-rose-300">
+              <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+              <div className="flex-1">{error}</div>
             </div>
-            <h2 className="text-lg font-bold text-zinc-200 mb-2">Vaultが設定されていません</h2>
-            <p className="text-xs text-zinc-400 max-w-sm mb-6 leading-relaxed">
-              GitHub Private リポジトリを連携して、スマホから安全にObsidianノートを閲覧・編集しましょう。
-            </p>
-            <button
-              type="button"
-              onClick={() => setIsSettingsOpen(true)}
-              className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-semibold shadow-lg transition-all"
-            >
-              Vaultを設定する
-            </button>
-          </div>
-        ) : (
-          <MarkdownViewer
-            content={content}
-            filePath={activeFilePath}
-            allFilePaths={allFilePaths}
-            onNavigateFile={(path) => {
-              if (activeVault) loadFileContent(activeVault, path);
-            }}
-            onToggleTask={handleToggleTask}
-          />
-        )}
-      </main>
+          )}
+
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-24 text-zinc-500 gap-3">
+              <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+              <span className="text-xs">ノートを読み込み中...</span>
+            </div>
+          ) : !activeVault ? (
+            <div className="flex flex-col items-center justify-center py-24 text-center px-4">
+              <div className="w-16 h-16 rounded-2xl bg-purple-600/20 flex items-center justify-center mb-4 border border-purple-500/30">
+                <Plus className="w-8 h-8 text-purple-400" />
+              </div>
+              <h2 className="text-lg font-bold text-zinc-200 mb-2">Vaultが設定されていません</h2>
+              <p className="text-xs text-zinc-400 max-w-sm mb-6 leading-relaxed">
+                GitHub Private リポジトリを連携して、スマホから安全にObsidianノートを閲覧・編集しましょう。
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-semibold shadow-lg transition-all"
+              >
+                Vaultを設定する
+              </button>
+            </div>
+          ) : (
+            <>
+              <MarkdownViewer
+                content={content}
+                filePath={activeFilePath}
+                allFilePaths={allFilePaths}
+                onNavigateFile={(path) => {
+                  if (activeVault) loadFileContent(activeVault, path);
+                }}
+                onToggleTask={handleToggleTask}
+              />
+
+              {/* Sibling Notes Navigation at Bottom */}
+              {uiPrefs.enableFooterNav && activeVault && activeFilePath && (
+                <FolderSiblingNav
+                  activeFilePath={activeFilePath}
+                  allFilePaths={allFilePaths}
+                  onSelectFile={(path) => {
+                    if (activeVault) loadFileContent(activeVault, path);
+                  }}
+                />
+              )}
+            </>
+          )}
+        </main>
+      </div>
 
       {/* Quick Append Bar (Sticky at bottom for mobile) */}
       {activeVault && activeFilePath && (
@@ -445,6 +557,8 @@ export const App: React.FC = () => {
         onDeleteVault={handleDeleteVault}
         onSelectVault={handleSelectVault}
         onClearCache={handleClearCache}
+        uiPrefs={uiPrefs}
+        onUpdateUIPrefs={handleUpdateUIPrefs}
       />
     </div>
   );

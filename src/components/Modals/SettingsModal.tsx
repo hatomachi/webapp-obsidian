@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   FolderSync,
 } from 'lucide-react';
-import { VaultConfig } from '../../types';
+import { VaultConfig, UIPreferences } from '../../types';
 import { GitHubService } from '../../services/GitHubService';
 
 interface SettingsModalProps {
@@ -23,6 +23,8 @@ interface SettingsModalProps {
   onDeleteVault: (id: string) => void;
   onSelectVault: (id: string) => void;
   onClearCache: (owner: string, repo: string) => void;
+  uiPrefs: UIPreferences;
+  onUpdateUIPrefs: (prefs: UIPreferences) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -35,6 +37,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onDeleteVault,
   onSelectVault,
   onClearCache,
+  uiPrefs,
+  onUpdateUIPrefs,
 }) => {
   const [isAdding, setIsAdding] = useState(vaults.length === 0);
   const [editingVaultId, setEditingVaultId] = useState<string | null>(null);
@@ -363,6 +367,90 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </form>
           )}
+
+          {/* UI Preferences (Feature Toggles) */}
+          <div className="pt-4 border-t border-zinc-800">
+            <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2.5">
+              ✨ ファイル移動・UI表示設定（お好みでON/OFF）
+            </h3>
+            <p className="text-xs text-zinc-500 mb-3">
+              使い勝手を自由にカスタマイズできます。不要な機能はいつでもOFFにして元のシンプルな表示に戻せます。
+            </p>
+
+            <div className="space-y-2.5">
+              {/* Desktop Sidebar */}
+              <label className="flex items-start gap-3 p-3 rounded-xl bg-zinc-950/40 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={uiPrefs.enableDesktopSidebar}
+                  onChange={(e) =>
+                    onUpdateUIPrefs({ ...uiPrefs, enableDesktopSidebar: e.target.checked })
+                  }
+                  className="mt-0.5 rounded text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 border-zinc-700 bg-zinc-800"
+                />
+                <div className="flex-1 text-xs">
+                  <span className="font-semibold text-zinc-200 block">PC 2ペイン常設表示</span>
+                  <span className="text-zinc-400 leading-relaxed">
+                    PC画面（幅768px以上）でファイルツリーを左側に常時表示します。ヘッダーのボタンで開閉も可能です。
+                  </span>
+                </div>
+              </label>
+
+              {/* Breadcrumbs */}
+              <label className="flex items-start gap-3 p-3 rounded-xl bg-zinc-950/40 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={uiPrefs.enableBreadcrumbs}
+                  onChange={(e) =>
+                    onUpdateUIPrefs({ ...uiPrefs, enableBreadcrumbs: e.target.checked })
+                  }
+                  className="mt-0.5 rounded text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 border-zinc-700 bg-zinc-800"
+                />
+                <div className="flex-1 text-xs">
+                  <span className="font-semibold text-zinc-200 block">パンくずリスト & 同フォルダシート</span>
+                  <span className="text-zinc-400 leading-relaxed">
+                    現在のフォルダ階層を表示します。フォルダ名をタップすると、そのフォルダ内のノートが下からスッと開きます。
+                  </span>
+                </div>
+              </label>
+
+              {/* Recent Notes & Back/Forward */}
+              <label className="flex items-start gap-3 p-3 rounded-xl bg-zinc-950/40 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={uiPrefs.enableRecentNotes}
+                  onChange={(e) =>
+                    onUpdateUIPrefs({ ...uiPrefs, enableRecentNotes: e.target.checked })
+                  }
+                  className="mt-0.5 rounded text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 border-zinc-700 bg-zinc-800"
+                />
+                <div className="flex-1 text-xs">
+                  <span className="font-semibold text-zinc-200 block">「戻る・進む」＆ 最近開いたノート</span>
+                  <span className="text-zinc-400 leading-relaxed">
+                    直前のノートに戻れる「←」「→」ボタンと、最近閲覧したノートの横スクロールチップを表示します。
+                  </span>
+                </div>
+              </label>
+
+              {/* Footer Sibling Nav */}
+              <label className="flex items-start gap-3 p-3 rounded-xl bg-zinc-950/40 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={uiPrefs.enableFooterNav}
+                  onChange={(e) =>
+                    onUpdateUIPrefs({ ...uiPrefs, enableFooterNav: e.target.checked })
+                  }
+                  className="mt-0.5 rounded text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 border-zinc-700 bg-zinc-800"
+                />
+                <div className="flex-1 text-xs">
+                  <span className="font-semibold text-zinc-200 block">ノート末尾の関連ノート案内</span>
+                  <span className="text-zinc-400 leading-relaxed">
+                    ノートを一番下までスクロールした位置に、同じフォルダの他ノートや「前へ/次へ」ボタンを表示します。
+                  </span>
+                </div>
+              </label>
+            </div>
+          </div>
 
           {/* Cache Management */}
           {vaults.length > 0 && (
