@@ -241,7 +241,7 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
                       onToggleTask(taskMeta.lineIndex, taskMeta.lineText, e.target.checked);
                     }
                   }}
-                  className="w-4 h-4 mr-2 rounded border-zinc-600 bg-zinc-800 text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 cursor-pointer accent-purple-600 align-middle -mt-0.5 transition-transform active:scale-125"
+                  className="w-[18px] h-[18px] mr-2.5 rounded border-zinc-600 bg-zinc-800 text-purple-600 focus:ring-purple-500 focus:ring-offset-zinc-900 cursor-pointer accent-purple-600 align-middle -mt-0.5 transition-transform active:scale-125 shrink-0"
                   {...props}
                 />
               );

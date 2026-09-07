@@ -15,6 +15,7 @@ import { FileTreeContent } from './components/Drawers/FileTreeContent';
 import { BreadcrumbNav } from './components/Navigation/BreadcrumbNav';
 import { RecentNotesBar } from './components/Navigation/RecentNotesBar';
 import { FolderSiblingNav } from './components/Navigation/FolderSiblingNav';
+import { ChecklistActionBar } from './components/Checklist/ChecklistActionBar';
 import { useNoteHistory } from './hooks/useNoteHistory';
 import { Loader2, AlertCircle, Plus, Send, Check } from 'lucide-react';
 
@@ -34,10 +35,12 @@ export const App: React.FC = () => {
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string>('');
   const [content, setContent] = useState<string>('');
+  const [initialContent, setInitialContent] = useState<string>('');
   const [currentSha, setCurrentSha] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSavingTasks, setIsSavingTasks] = useState<boolean>(false);
 
   // Quick Append Input State
   const [quickNoteText, setQuickNoteText] = useState('');
@@ -184,6 +187,7 @@ export const App: React.FC = () => {
     try {
       const res = await GitHubService.fetchFileContent(vault, path);
       setContent(res.content);
+      setInitialContent(res.content);
       setCurrentSha(res.sha);
     } catch (e: any) {
       console.error('Failed to load file:', e);
@@ -193,37 +197,100 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Checklist stats and pending changes calculation
+  const taskStats = useMemo(() => {
+    if (!content) {
+      return { total: 0, completed: 0, pendingChanges: 0 };
+    }
+
+    const currentLines = content.split('\n');
+    const initialLines = initialContent ? initialContent.split('\n') : [];
+
+    let total = 0;
+    let completed = 0;
+    let pendingChanges = 0;
+
+    let inCode = false;
+    for (let i = 0; i < currentLines.length; i++) {
+      const line = currentLines[i];
+      if (line.trim().startsWith('```')) {
+        inCode = !inCode;
+        continue;
+      }
+      if (inCode) continue;
+
+      const match = line.match(/^\s*[-*+]\s*\[([ xX])\]/);
+      if (match) {
+        total++;
+        const isChecked = match[1].toLowerCase() === 'x';
+        if (isChecked) completed++;
+
+        // Compare with initial content line
+        const initialLine = initialLines[i];
+        if (initialLine !== undefined) {
+          const initMatch = initialLine.match(/^\s*[-*+]\s*\[([ xX])\]/);
+          if (initMatch) {
+            const initChecked = initMatch[1].toLowerCase() === 'x';
+            if (isChecked !== initChecked) {
+              pendingChanges++;
+            }
+          } else {
+            pendingChanges++;
+          }
+        } else {
+          pendingChanges++;
+        }
+      }
+    }
+
+    if (initialContent && content !== initialContent && pendingChanges === 0) {
+      pendingChanges = 1;
+    }
+
+    return { total, completed, pendingChanges };
+  }, [content, initialContent]);
+
+  // Safe navigation that guards against discarding uncommitted checklist changes
+  const safeNavigateFile = useCallback(
+    (path: string) => {
+      if (taskStats.pendingChanges > 0) {
+        if (!window.confirm('未保存のチェック変更があります。破棄して移動しますか？')) {
+          return;
+        }
+      }
+      if (activeVault) loadFileContent(activeVault, path);
+    },
+    [activeVault, loadFileContent, taskStats.pendingChanges]
+  );
+
   // Note Navigation History & Recents Hook
   const { recentNotes, canGoBack, canGoForward, goBack, goForward } = useNoteHistory(
     activeVaultId,
     activeFilePath,
-    useCallback(
-      (path: string) => {
-        if (activeVault) loadFileContent(activeVault, path);
-      },
-      [activeVault, loadFileContent]
-    )
+    safeNavigateFile
   );
 
   // Switch vault
   const handleSelectVault = (vaultId: string) => {
+    if (taskStats.pendingChanges > 0) {
+      if (!window.confirm('未保存のチェック変更があります。破棄してVaultを切り替えますか？')) {
+        return;
+      }
+    }
     setActiveVaultId(vaultId);
     VaultManager.setActiveVaultId(vaultId);
     setFileTree([]);
     setActiveFilePath('');
     setContent('');
+    setInitialContent('');
   };
 
-  // Toggle interactive task in viewer
-  const handleToggleTask = async (
+  // Toggle interactive task in viewer (hybrid local toggle: no immediate git commit)
+  const handleToggleTask = (
     lineIndex: number,
-    lineText: string,
+    _lineText: string,
     checked: boolean
   ) => {
-    if (!activeVault || !activeFilePath) return;
-
-    // Optimistic UI update
-    const previousContent = content;
     const lines = content.split('\n');
     if (lines[lineIndex] !== undefined) {
       const line = lines[lineIndex];
@@ -232,25 +299,64 @@ export const App: React.FC = () => {
         : line.replace(/-\s*\[x\]/i, '- [ ]');
       setContent(lines.join('\n'));
     }
+  };
 
+  // Commit all task changes to GitHub as a single batch
+  const handleSaveTaskChanges = async () => {
+    if (!activeVault || !activeFilePath) return;
+
+    setIsSavingTasks(true);
     try {
-      showToast(checked ? 'タスクを完了にしました (コミット中...)' : 'タスクを未完了にしました (コミット中...)', 'info');
-      const res = await GitHubService.toggleTaskInFile(
+      showToast('チェック状態をGitHubへコミット中...', 'info');
+      const res = await GitHubService.saveFile(
         activeVault,
         activeFilePath,
-        lineIndex,
-        lineText,
-        checked
+        content,
+        currentSha,
+        `chore: update checklist in ${activeFilePath}`
       );
-      setContent(res.newContent);
+      setInitialContent(content);
       setCurrentSha(res.newSha);
-      showToast('GitHubへコミットしました', 'success');
+      showToast('GitHubへ反映しました', 'success');
     } catch (e: any) {
-      console.error('Task toggle failed:', e);
-      // Rollback on error
-      setContent(previousContent);
+      console.error('Task save failed:', e);
       showToast(`コミットに失敗しました: ${e.message}`, 'error');
+    } finally {
+      setIsSavingTasks(false);
     }
+  };
+
+  // Reset all tasks in current note to unchecked
+  const handleResetAllTasks = () => {
+    if (!content) return;
+    const lines = content.split('\n');
+    let inCode = false;
+    let modified = false;
+
+    const newLines = lines.map((line) => {
+      if (line.trim().startsWith('```')) {
+        inCode = !inCode;
+        return line;
+      }
+      if (inCode) return line;
+
+      if (/^\s*[-*+]\s*\[[xX]\]/.test(line)) {
+        modified = true;
+        return line.replace(/^(\s*[-*+]\s*\[)[xX](\])/, '$1 $2');
+      }
+      return line;
+    });
+
+    if (modified) {
+      setContent(newLines.join('\n'));
+      showToast('すべてのチェックを解除しました', 'info');
+    }
+  };
+
+  // Discard uncommitted task changes
+  const handleDiscardTaskChanges = () => {
+    setContent(initialContent);
+    showToast('チェックの変更を元に戻しました', 'info');
   };
 
   // Quick Append to current note
@@ -275,6 +381,7 @@ export const App: React.FC = () => {
         currentSha,
         `chore: append quick note to ${activeFilePath}`
       );
+      setInitialContent(updatedContent);
       setCurrentSha(res.newSha);
       showToast('追記＆コミット完了', 'success');
     } catch (e: any) {
@@ -296,6 +403,7 @@ export const App: React.FC = () => {
       commitMessage
     );
     setContent(newContent);
+    setInitialContent(newContent);
     setCurrentSha(res.newSha);
     showToast('保存＆コミットが完了しました', 'success');
   };
@@ -393,9 +501,7 @@ export const App: React.FC = () => {
               canGoForward={canGoForward}
               onGoBack={goBack}
               onGoForward={goForward}
-              onSelectFile={(path) => {
-                if (activeVault) loadFileContent(activeVault, path);
-              }}
+              onSelectFile={safeNavigateFile}
             />
           )}
         </div>
@@ -410,9 +516,7 @@ export const App: React.FC = () => {
               <FileTreeContent
                 fileTree={fileTree}
                 activeFilePath={activeFilePath}
-                onSelectFile={(path) => {
-                  if (activeVault) loadFileContent(activeVault, path);
-                }}
+                onSelectFile={safeNavigateFile}
               />
             </div>
             <div className="p-2.5 border-t border-obsidian-border bg-zinc-900/40 text-[11px] text-zinc-500 truncate flex items-center justify-between">
@@ -423,7 +527,7 @@ export const App: React.FC = () => {
         )}
 
         {/* Main Content Scroll Area */}
-        <main className="flex-1 overflow-y-auto pb-24">
+        <main className={`flex-1 overflow-y-auto ${taskStats.total > 0 ? 'pb-32 sm:pb-28' : 'pb-24'}`}>
           {error && (
             <div className="m-4 p-3 bg-rose-950/40 border border-rose-800 rounded-xl flex items-center gap-3 text-xs text-rose-300">
               <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
@@ -459,9 +563,7 @@ export const App: React.FC = () => {
                 content={content}
                 filePath={activeFilePath}
                 allFilePaths={allFilePaths}
-                onNavigateFile={(path) => {
-                  if (activeVault) loadFileContent(activeVault, path);
-                }}
+                onNavigateFile={safeNavigateFile}
                 onToggleTask={handleToggleTask}
               />
 
@@ -470,15 +572,30 @@ export const App: React.FC = () => {
                 <FolderSiblingNav
                   activeFilePath={activeFilePath}
                   allFilePaths={allFilePaths}
-                  onSelectFile={(path) => {
-                    if (activeVault) loadFileContent(activeVault, path);
-                  }}
+                  onSelectFile={safeNavigateFile}
                 />
               )}
             </>
           )}
         </main>
       </div>
+
+      {/* Checklist Action Bar (Sticky above quick append bar when note contains tasks) */}
+      {activeVault && activeFilePath && taskStats.total > 0 && (
+        <div className="fixed bottom-14 sm:bottom-16 left-0 right-0 z-20 pointer-events-none">
+          <div className="pointer-events-auto">
+            <ChecklistActionBar
+              totalTasks={taskStats.total}
+              completedTasks={taskStats.completed}
+              pendingChangeCount={taskStats.pendingChanges}
+              isSaving={isSavingTasks}
+              onSave={handleSaveTaskChanges}
+              onResetAll={handleResetAllTasks}
+              onDiscard={handleDiscardTaskChanges}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Quick Append Bar (Sticky at bottom for mobile) */}
       {activeVault && activeFilePath && (
@@ -517,9 +634,7 @@ export const App: React.FC = () => {
         onClose={() => setIsSidebarOpen(false)}
         fileTree={fileTree}
         activeFilePath={activeFilePath}
-        onSelectFile={(path) => {
-          if (activeVault) loadFileContent(activeVault, path);
-        }}
+        onSelectFile={safeNavigateFile}
         activeVault={activeVault}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
@@ -534,9 +649,7 @@ export const App: React.FC = () => {
         isOpen={isQuickSwitcherOpen}
         onClose={() => setIsQuickSwitcherOpen(false)}
         allFilePaths={allFilePaths}
-        onSelectFile={(path) => {
-          if (activeVault) loadFileContent(activeVault, path);
-        }}
+        onSelectFile={safeNavigateFile}
       />
 
       <EditModal

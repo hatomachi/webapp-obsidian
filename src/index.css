@@ -55,4 +55,12 @@ body {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
+  padding: 2px 0;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+
+.markdown-body li.task-list-item:has(input:checked) {
+  color: #71717a;
+  text-decoration: line-through;
+  text-decoration-color: #52525b;
 }
