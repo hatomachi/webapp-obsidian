@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { Callout } from './Callout';
+import { MermaidBlock } from './MermaidBlock';
 import {
   preprocessWikiLinks,
   parseCallout,
@@ -310,10 +311,18 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
                 </code>
               );
             }
+
+            const language = className?.replace('language-', '') || '';
+
+            // Render Mermaid diagrams with lazy loading
+            if (language === 'mermaid') {
+              return <MermaidBlock code={String(children).replace(/\n$/, '')} />;
+            }
+
             return (
               <div className="my-3 rounded-lg overflow-hidden border border-zinc-800 bg-[#121214]">
                 <div className="bg-zinc-800/40 px-3 py-1 text-xs text-zinc-400 font-mono border-b border-zinc-800/60 flex justify-between items-center">
-                  <span>{className?.replace('language-', '') || 'code'}</span>
+                  <span>{language || 'code'}</span>
                 </div>
                 <pre className="p-3 text-xs sm:text-sm font-mono text-zinc-300 overflow-x-auto">
                   <code {...props}>{children}</code>
