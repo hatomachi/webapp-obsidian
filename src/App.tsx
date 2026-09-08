@@ -739,7 +739,7 @@ export const App: React.FC = () => {
 
       {/* Quick Append Bar (Sticky at bottom for mobile) */}
       {activeVault && activeFilePath && (
-        <div className="fixed bottom-0 left-0 right-0 z-20 bg-obsidian-sidebar/95 backdrop-blur-md border-t border-obsidian-border p-2 safe-bottom">
+        <div className="fixed bottom-0 left-0 right-0 z-20 bg-obsidian-sidebar/95 backdrop-blur-md border-t border-obsidian-border p-2 safe-bottom select-none">
           <form
             onSubmit={handleQuickAppend}
             className="max-w-4xl mx-auto flex items-center gap-2 px-2"
@@ -750,7 +750,7 @@ export const App: React.FC = () => {
               onChange={(e) => setQuickNoteText(e.target.value)}
               placeholder="＋ このノートの末尾にTODOを追加..."
               disabled={isAppending}
-              className="flex-1 px-3 py-2 bg-zinc-900 border border-zinc-700/80 rounded-xl text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500 transition-colors"
+              className="flex-1 px-3 py-2 bg-zinc-900 border border-zinc-700/80 rounded-xl text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500 transition-colors select-text"
             />
             <button
               type="submit"

@@ -26,7 +26,7 @@ export const ChecklistActionBar: React.FC<ChecklistActionBarProps> = ({
   const hasChanges = pendingChangeCount > 0;
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-2 sm:px-4 py-1">
+    <div className="w-full max-w-4xl mx-auto px-2 sm:px-4 py-1 select-none">
       <div
         className={`flex items-center justify-between gap-2 sm:gap-3 px-3 py-2 rounded-xl border transition-all ${
           hasChanges

@@ -10,7 +10,7 @@ import {
   extractTOC,
   resolveWikiLinkPath,
 } from '../../utils/markdownUtils';
-import { ExternalLink, Hash } from 'lucide-react';
+import { ExternalLink, Hash, Copy, Check } from 'lucide-react';
 
 interface MarkdownViewerProps {
   content: string;
@@ -25,6 +25,61 @@ interface TaskItemMeta {
   lineText: string;
   checked: boolean;
 }
+
+const CodeBlock: React.FC<{
+  language: string;
+  children: React.ReactNode;
+}> = ({ language, children }) => {
+  const [copied, setCopied] = React.useState(false);
+
+  const getCodeString = () => {
+    if (typeof children === 'string') return children;
+    if (Array.isArray(children)) {
+      return children.map((c) => (typeof c === 'string' ? c : '')).join('');
+    }
+    return String(children || '');
+  };
+
+  const handleCopy = async () => {
+    try {
+      const text = getCodeString().replace(/\n$/, '');
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy code:', err);
+    }
+  };
+
+  return (
+    <div className="my-3 rounded-xl overflow-hidden border border-zinc-800 bg-[#121214] shadow-sm">
+      <div className="bg-zinc-800/50 px-3.5 py-1.5 text-xs text-zinc-400 font-mono border-b border-zinc-800/80 flex justify-between items-center select-none">
+        <span className="font-medium text-zinc-300">{language || 'code'}</span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60 active:bg-zinc-600/60 transition-colors text-[11px]"
+          title="コードをコピー"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-emerald-400 font-medium">コピー完了</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5 text-zinc-400" />
+              <span>コピー</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="p-3.5 text-xs sm:text-sm font-mono text-zinc-300 overflow-x-auto select-text">
+        <code>{children}</code>
+      </pre>
+    </div>
+  );
+};
 
 export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
   content,
@@ -77,7 +132,7 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
   headingRenderIndexRef.current = 0;
 
   return (
-    <div className="markdown-body p-4 sm:p-8 max-w-4xl mx-auto text-zinc-200 leading-relaxed text-[15px] sm:text-[16px]">
+    <div className="markdown-body p-4 sm:p-8 max-w-4xl mx-auto text-zinc-200 leading-relaxed text-[15px] sm:text-[16px] select-text">
       <Markdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
@@ -320,14 +375,9 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
             }
 
             return (
-              <div className="my-3 rounded-lg overflow-hidden border border-zinc-800 bg-[#121214]">
-                <div className="bg-zinc-800/40 px-3 py-1 text-xs text-zinc-400 font-mono border-b border-zinc-800/60 flex justify-between items-center">
-                  <span>{language || 'code'}</span>
-                </div>
-                <pre className="p-3 text-xs sm:text-sm font-mono text-zinc-300 overflow-x-auto">
-                  <code {...props}>{children}</code>
-                </pre>
-              </div>
+              <CodeBlock language={language} {...props}>
+                {children}
+              </CodeBlock>
             );
           },
 

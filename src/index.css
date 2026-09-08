@@ -41,6 +41,12 @@ body {
 }
 
 /* Markdown typography enhancements */
+.markdown-body {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
 .markdown-body blockquote {
   margin-top: 0.8em;
   margin-bottom: 0.8em;
