@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronRight, ChevronLeft, Folder, FileText, X, Layers } from 'lucide-react';
 
 interface BreadcrumbNavProps {
@@ -193,151 +194,154 @@ export const BreadcrumbNav: React.FC<BreadcrumbNavProps> = ({
       </nav>
 
       {/* Bottom Sheet Modal for drill-down navigation */}
-      {selectedFolderForSheet !== null && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150"
-            onClick={() => setSelectedFolderForSheet(null)}
-          />
+      {selectedFolderForSheet !== null &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
+            {/* Backdrop */}
+            <div
+              className="fixed inset-0 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150"
+              onClick={() => setSelectedFolderForSheet(null)}
+            />
 
-          {/* Sheet dialog */}
-          <div className="relative w-full sm:max-w-md bg-zinc-900 border border-zinc-700/80 rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden z-10 animate-in slide-in-from-bottom duration-200 safe-bottom max-h-[75vh] flex flex-col">
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-800/50">
-              <div className="flex items-center gap-2 truncate flex-1 mr-2">
-                {selectedFolderForSheet !== '' && (
-                  <button
-                    type="button"
-                    onClick={handleGoBack}
-                    title="親階層へ戻る"
-                    className="p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60 rounded-lg transition-colors shrink-0"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                )}
-                <Folder className="w-4 h-4 text-purple-400 shrink-0" />
-                <div className="text-xs font-semibold text-zinc-200 truncate">
-                  {selectedFolderForSheet || 'ルート (Root)'}
+            {/* Sheet dialog */}
+            <div className="relative w-full sm:max-w-md bg-zinc-900 border border-zinc-700/80 rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden z-10 animate-in slide-in-from-bottom duration-200 safe-bottom max-h-[75vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-800/50">
+                <div className="flex items-center gap-2 truncate flex-1 mr-2">
+                  {selectedFolderForSheet !== '' && (
+                    <button
+                      type="button"
+                      onClick={handleGoBack}
+                      title="親階層へ戻る"
+                      className="p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60 rounded-lg transition-colors shrink-0"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
+                  <Folder className="w-4 h-4 text-purple-400 shrink-0" />
+                  <div className="text-xs font-semibold text-zinc-200 truncate">
+                    {selectedFolderForSheet || 'ルート (Root)'}
+                  </div>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-900/50 text-purple-300 font-medium shrink-0">
+                    {totalItems} 件
+                  </span>
                 </div>
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-900/50 text-purple-300 font-medium shrink-0">
-                  {totalItems} 件
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedFolderForSheet(null)}
+                  className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-700 transition-colors shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedFolderForSheet(null)}
-                className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-700 transition-colors shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            {/* Content List: Folders & Files */}
-            <div className="overflow-y-auto p-2 space-y-3">
-              {totalItems === 0 ? (
-                <div className="text-center py-8 text-xs text-zinc-500">
-                  このフォルダには項目がありません
-                </div>
-              ) : (
-                <>
-                  {/* Folders Section */}
-                  {currentSubFolders.length > 0 && (
-                    <div>
-                      {currentFiles.length > 0 && (
-                        <div className="px-2 pb-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
-                          フォルダ ({currentSubFolders.length})
-                        </div>
-                      )}
-                      <div className="space-y-1">
-                        {currentSubFolders.map((folder) => {
-                          const isCurrentActive =
-                            activeFilePath.startsWith(`${folder.path}/`) ||
-                            activeFilePath === folder.path;
+              {/* Content List: Folders & Files */}
+              <div className="overflow-y-auto p-2 pb-6 space-y-3">
+                {totalItems === 0 ? (
+                  <div className="text-center py-8 text-xs text-zinc-500">
+                    このフォルダには項目がありません
+                  </div>
+                ) : (
+                  <>
+                    {/* Folders Section */}
+                    {currentSubFolders.length > 0 && (
+                      <div>
+                        {currentFiles.length > 0 && (
+                          <div className="px-2 pb-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                            フォルダ ({currentSubFolders.length})
+                          </div>
+                        )}
+                        <div className="space-y-1">
+                          {currentSubFolders.map((folder) => {
+                            const isCurrentActive =
+                              activeFilePath.startsWith(`${folder.path}/`) ||
+                              activeFilePath === folder.path;
 
-                          return (
-                            <button
-                              key={folder.path}
-                              type="button"
-                              onClick={() => setSelectedFolderForSheet(folder.path)}
-                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-xs transition-all active:scale-[0.99] min-h-[46px] group ${
-                                isCurrentActive
-                                  ? 'bg-purple-950/40 text-purple-200 border border-purple-800/50 font-medium'
-                                  : 'text-zinc-200 hover:bg-zinc-800/80 active:bg-zinc-800'
-                              }`}
-                            >
-                              <div className="w-7 h-7 rounded-lg bg-purple-900/30 flex items-center justify-center shrink-0">
-                                <Folder className="w-4 h-4 text-purple-400" />
-                              </div>
-                              <span className="truncate flex-1 font-medium text-zinc-200">
-                                {folder.name}
-                              </span>
-                              {isCurrentActive && (
-                                <span className="text-[10px] font-semibold text-purple-400 bg-purple-950/80 px-2 py-0.5 rounded-md border border-purple-800/60 shrink-0">
-                                  現在地
+                            return (
+                              <button
+                                key={folder.path}
+                                type="button"
+                                onClick={() => setSelectedFolderForSheet(folder.path)}
+                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-xs transition-all active:scale-[0.99] min-h-[46px] group ${
+                                  isCurrentActive
+                                    ? 'bg-purple-950/40 text-purple-200 border border-purple-800/50 font-medium'
+                                    : 'text-zinc-200 hover:bg-zinc-800/80 active:bg-zinc-800'
+                                }`}
+                              >
+                                <div className="w-7 h-7 rounded-lg bg-purple-900/30 flex items-center justify-center shrink-0">
+                                  <Folder className="w-4 h-4 text-purple-400" />
+                                </div>
+                                <span className="truncate flex-1 font-medium text-zinc-200">
+                                  {folder.name}
                                 </span>
-                              )}
-                              <span className="text-[11px] text-zinc-400 shrink-0 font-mono">
-                                {folder.fileCount} ノート
-                              </span>
-                              <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200 shrink-0" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Notes Section */}
-                  {currentFiles.length > 0 && (
-                    <div>
-                      {currentSubFolders.length > 0 && (
-                        <div className="px-2 pt-2 pb-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider border-t border-zinc-800/60">
-                          ノート ({currentFiles.length})
-                        </div>
-                      )}
-                      <div className="space-y-1">
-                        {currentFiles.map((f) => {
-                          const isCurrent = f.path === activeFilePath;
-                          return (
-                            <button
-                              key={f.path}
-                              type="button"
-                              onClick={() => {
-                                onSelectFile(f.path);
-                                setSelectedFolderForSheet(null);
-                              }}
-                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-xs transition-all active:scale-[0.99] min-h-[46px] ${
-                                isCurrent
-                                  ? 'bg-purple-600/20 text-purple-300 font-bold border border-purple-500/40'
-                                  : 'text-zinc-200 hover:bg-zinc-800/90 active:bg-zinc-800'
-                              }`}
-                            >
-                              <div className="w-7 h-7 rounded-lg bg-zinc-800/60 flex items-center justify-center shrink-0">
-                                <FileText
-                                  className={`w-4 h-4 ${
-                                    isCurrent ? 'text-purple-400' : 'text-zinc-400'
-                                  }`}
-                                />
-                              </div>
-                              <span className="truncate flex-1 font-medium">{f.name}</span>
-                              {isCurrent && (
-                                <span className="text-[10px] uppercase font-semibold text-purple-400 bg-purple-950/60 px-2 py-0.5 rounded-md shrink-0">
-                                  閲覧中
+                                {isCurrentActive && (
+                                  <span className="text-[10px] font-semibold text-purple-400 bg-purple-950/80 px-2 py-0.5 rounded-md border border-purple-800/60 shrink-0">
+                                    現在地
+                                  </span>
+                                )}
+                                <span className="text-[11px] text-zinc-400 shrink-0 font-mono">
+                                  {folder.fileCount} ノート
                                 </span>
-                              )}
-                            </button>
-                          );
-                        })}
+                                <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200 shrink-0" />
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </>
-              )}
+                    )}
+
+                    {/* Notes Section */}
+                    {currentFiles.length > 0 && (
+                      <div>
+                        {currentSubFolders.length > 0 && (
+                          <div className="px-2 pt-2 pb-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider border-t border-zinc-800/60">
+                            ノート ({currentFiles.length})
+                          </div>
+                        )}
+                        <div className="space-y-1">
+                          {currentFiles.map((f) => {
+                            const isCurrent = f.path === activeFilePath;
+                            return (
+                              <button
+                                key={f.path}
+                                type="button"
+                                onClick={() => {
+                                  onSelectFile(f.path);
+                                  setSelectedFolderForSheet(null);
+                                }}
+                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-xs transition-all active:scale-[0.99] min-h-[46px] ${
+                                  isCurrent
+                                    ? 'bg-purple-600/20 text-purple-300 font-bold border border-purple-500/40'
+                                    : 'text-zinc-200 hover:bg-zinc-800/90 active:bg-zinc-800'
+                                }`}
+                              >
+                                <div className="w-7 h-7 rounded-lg bg-zinc-800/60 flex items-center justify-center shrink-0">
+                                  <FileText
+                                    className={`w-4 h-4 ${
+                                      isCurrent ? 'text-purple-400' : 'text-zinc-400'
+                                    }`}
+                                  />
+                                </div>
+                                <span className="truncate flex-1 font-medium">{f.name}</span>
+                                {isCurrent && (
+                                  <span className="text-[10px] uppercase font-semibold text-purple-400 bg-purple-950/60 px-2 py-0.5 rounded-md shrink-0">
+                                    閲覧中
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </>
   );
 };
