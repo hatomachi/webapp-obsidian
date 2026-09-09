@@ -4,6 +4,11 @@
 
 作業を開始する際は、必ず本ドキュメントおよび [`docs/ARCHITECTURE_AND_CONCEPT.md`](docs/ARCHITECTURE_AND_CONCEPT.md) を前提として行動してください。
 
+> [!IMPORTANT]
+> **🎯 プロダクト作戦ノート & Next Actions (personal-vault)**:  
+> 本プロダクトの全体ビジョン、現在地、ユーザーからの日常フィードバック、直近の Next Actions は [webapp-obsidian.md](file:///Users/s-ikari/work/personal-vault/10_%E8%81%B7%E4%BA%BA%E3%83%BB%E7%99%BA%E6%98%8E%E5%AE%B6/webapp-obsidian.md) に一元管理されています。実装着手・機能完了時は必ず確認・更新してください。
+
+
 
 ---
 
