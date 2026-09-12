@@ -45,28 +45,52 @@ export function extractTOC(content: string): TOCItem[] {
 /**
  * Preprocess Obsidian WikiLinks: [[Target Note]] or [[Target Note|Display Text]]
  * Converts them to custom markdown link format: [Display Text](wikilink:Target Note)
+ * Preserves code blocks and inline code without modification.
  */
 export function preprocessWikiLinks(content: string): string {
-  // Matches [[target]] or [[target|alias]]
-  return content.replace(/\[\[(.*?)\]\]/g, (_, inner) => {
-    let target = inner.trim();
-    let alias = target;
+  // Split content by code blocks and inline code to prevent replacing inside code
+  const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`)/g;
+  const parts = content.split(codeBlockRegex);
 
-    if (target.includes('|')) {
-      const parts = target.split('|');
-      target = parts[0].trim();
-      alias = parts.slice(1).join('|').trim();
-    }
+  return parts
+    .map((part, index) => {
+      // Odd indices are code blocks or inline code matched by regex; preserve as-is
+      if (index % 2 === 1) {
+        return part;
+      }
 
-    // Handle heading links: [[Note#Heading]] -> target is Note
-    let cleanTarget = target;
-    if (cleanTarget.includes('#')) {
-      cleanTarget = cleanTarget.split('#')[0].trim();
-    }
+      // Matches [[target]] or [[target|alias]]
+      return part.replace(/\[\[(.*?)\]\]/g, (_, inner) => {
+        let target = inner.trim();
+        let alias = target;
 
-    // Return custom URI link
-    return `[${alias}](wikilink:${encodeURIComponent(cleanTarget)})`;
-  });
+        if (target.includes('|')) {
+          const splitParts = target.split('|');
+          target = splitParts[0].trim();
+          alias = splitParts.slice(1).join('|').trim();
+        }
+
+        // Check if there is a heading anchor: Note#Heading or #Heading
+        let noteName = target;
+        let heading = '';
+        if (target.includes('#')) {
+          const hashIndex = target.indexOf('#');
+          noteName = target.substring(0, hashIndex).trim();
+          heading = target.substring(hashIndex + 1).trim();
+        }
+
+        // Default display alias formatting for headings if no explicit alias provided
+        if (alias === target && heading) {
+          alias = noteName ? `${noteName} > ${heading}` : heading;
+        }
+
+        const encodedNote = encodeURIComponent(noteName);
+        const encodedHeading = heading ? `#${encodeURIComponent(heading)}` : '';
+
+        return `[${alias}](wikilink:${encodedNote}${encodedHeading})`;
+      });
+    })
+    .join('');
 }
 
 /**
@@ -77,11 +101,50 @@ export function resolveWikiLinkPath(
   allFilePaths: string[],
   currentFilePath: string
 ): string | null {
-  const decodedTarget = decodeURIComponent(targetNoteName).trim();
+  if (!targetNoteName) return null;
+
+  let decodedTarget = targetNoteName.trim();
+  try {
+    decodedTarget = decodeURIComponent(decodedTarget).trim();
+  } catch {
+    // ignore
+  }
   if (!decodedTarget) return null;
 
-  const targetWithExt = decodedTarget.endsWith('.md') ? decodedTarget : `${decodedTarget}.md`;
-  const targetNameOnly = decodedTarget.replace(/\.md$/, '');
+  // Clean heading anchor if present: "Note#Heading" -> "Note"
+  if (decodedTarget.includes('#')) {
+    decodedTarget = decodedTarget.split('#')[0].trim();
+  }
+  if (!decodedTarget) return null;
+
+  // Normalize leading slashes and ./
+  let normalized = decodedTarget.replace(/^\/+/, '');
+  if (normalized.startsWith('./')) {
+    normalized = normalized.substring(2);
+  }
+
+  // Handle relative path with ../
+  if (normalized.includes('../')) {
+    const currentDir = currentFilePath.includes('/')
+      ? currentFilePath.substring(0, currentFilePath.lastIndexOf('/'))
+      : '';
+    const parts = currentDir ? currentDir.split('/') : [];
+    const relParts = normalized.split('/');
+    for (const part of relParts) {
+      if (part === '.' || part === '') continue;
+      if (part === '..') {
+        parts.pop();
+      } else {
+        parts.push(part);
+      }
+    }
+    normalized = parts.join('/');
+  }
+
+  const targetWithExt = normalized.endsWith('.md') ? normalized : `${normalized}.md`;
+  const targetNameOnly = normalized.replace(/\.md$/, '');
+  const basenameOnly = targetNameOnly.split('/').pop() || targetNameOnly;
+  const basenameWithExt = `${basenameOnly}.md`;
 
   // 1. Check exact path match
   if (allFilePaths.includes(targetWithExt)) {
@@ -93,17 +156,44 @@ export function resolveWikiLinkPath(
     ? currentFilePath.substring(0, currentFilePath.lastIndexOf('/'))
     : '';
   if (currentDir) {
-    const siblingPath = `${currentDir}/${targetWithExt}`;
+    const siblingPath = `${currentDir}/${basenameWithExt}`;
     if (allFilePaths.includes(siblingPath)) {
       return siblingPath;
     }
   }
 
-  // 3. Search anywhere in vault by basename
+  // 3. Match by path ending (e.g. user linked "folder/note" and full path is "root/folder/note.md")
+  for (const path of allFilePaths) {
+    if (path.endsWith(`/${targetWithExt}`) || path === targetWithExt) {
+      return path;
+    }
+  }
+
+  // 4. Search anywhere in vault by basename
   for (const path of allFilePaths) {
     const fileName = path.split('/').pop() || '';
     const baseName = fileName.replace(/\.md$/, '');
-    if (fileName === targetWithExt || baseName === targetNameOnly) {
+    if (fileName === basenameWithExt || baseName === basenameOnly) {
+      return path;
+    }
+  }
+
+  // 5. Case-insensitive fallback search
+  const lowerTargetWithExt = targetWithExt.toLowerCase();
+  const lowerBasenameWithExt = basenameWithExt.toLowerCase();
+  const lowerBasenameOnly = basenameOnly.toLowerCase();
+
+  for (const path of allFilePaths) {
+    const lowerPath = path.toLowerCase();
+    const fileName = path.split('/').pop() || '';
+    const baseName = fileName.replace(/\.md$/, '');
+
+    if (
+      lowerPath === lowerTargetWithExt ||
+      lowerPath.endsWith(`/${lowerTargetWithExt}`) ||
+      fileName.toLowerCase() === lowerBasenameWithExt ||
+      baseName.toLowerCase() === lowerBasenameOnly
+    ) {
       return path;
     }
   }

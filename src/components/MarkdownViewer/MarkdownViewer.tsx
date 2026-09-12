@@ -1,5 +1,5 @@
-import React, { useMemo, useRef } from 'react';
-import Markdown from 'react-markdown';
+import React, { useMemo, useRef, useCallback } from 'react';
+import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { Callout } from './Callout';
@@ -16,7 +16,7 @@ interface MarkdownViewerProps {
   content: string;
   filePath: string;
   allFilePaths: string[];
-  onNavigateFile: (path: string) => void;
+  onNavigateFile: (path: string, heading?: string) => void;
   onToggleTask?: (lineIndex: number, lineText: string, checked: boolean) => void;
 }
 
@@ -131,36 +131,157 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({
   const headingRenderIndexRef = useRef(0);
   headingRenderIndexRef.current = 0;
 
+  // Scroll to heading in document
+  const scrollToHeading = useCallback((targetHeadingOrId: string) => {
+    const clean = decodeURIComponent(targetHeadingOrId).replace(/^#/, '').trim().toLowerCase();
+    if (!clean) return;
+
+    // 1. Direct ID match
+    let el = document.getElementById(clean) || document.getElementById(targetHeadingOrId.replace(/^#/, ''));
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+
+    // 2. Look up in TOC items
+    const matched = tocList.find((t) => {
+      const itemText = t.text.toLowerCase().trim();
+      const itemId = t.id.toLowerCase();
+      return itemText === clean || itemId.includes(clean) || clean.includes(itemText);
+    });
+    if (matched) {
+      el = document.getElementById(matched.id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
+    }
+
+    // 3. Search DOM headings
+    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    for (const h of headings) {
+      const text = h.textContent?.trim().toLowerCase() || '';
+      if (text === clean || text.includes(clean) || clean.includes(text)) {
+        h.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
+    }
+  }, [tocList]);
+
   return (
     <div className="markdown-body p-4 sm:p-8 max-w-4xl mx-auto text-zinc-200 leading-relaxed text-[15px] sm:text-[16px] select-text">
       <Markdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
+        urlTransform={(url) => {
+          if (url.startsWith('wikilink:')) {
+            return url;
+          }
+          return defaultUrlTransform(url);
+        }}
         components={{
-          // WikiLinks and External Links
+          // WikiLinks, Internal Anchors, Vault Markdown Files, and External Links
           a({ href, children, ...props }) {
+            // 1. WikiLinks: wikilink:TargetNote or wikilink:TargetNote#Heading or wikilink:#Heading
             if (href?.startsWith('wikilink:')) {
-              const noteTarget = decodeURIComponent(href.replace('wikilink:', ''));
-              const resolvedPath = resolveWikiLinkPath(noteTarget, allFilePaths, filePath);
+              const rawTarget = href.replace('wikilink:', '');
+              let notePart = rawTarget;
+              let headingPart = '';
+              if (rawTarget.includes('#')) {
+                const idx = rawTarget.indexOf('#');
+                notePart = rawTarget.substring(0, idx);
+                headingPart = rawTarget.substring(idx + 1);
+              }
+
+              let noteTarget = '';
+              try {
+                noteTarget = decodeURIComponent(notePart).trim();
+              } catch {
+                noteTarget = notePart.trim();
+              }
+
+              let headingTarget = '';
+              try {
+                headingTarget = decodeURIComponent(headingPart).trim();
+              } catch {
+                headingTarget = headingPart.trim();
+              }
+
+              const isSameNoteHeading = !noteTarget && !!headingTarget;
+              const resolvedPath = noteTarget ? resolveWikiLinkPath(noteTarget, allFilePaths, filePath) : null;
 
               return (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (isSameNoteHeading) {
+                      scrollToHeading(headingTarget);
+                      return;
+                    }
                     if (resolvedPath) {
-                      onNavigateFile(resolvedPath);
+                      onNavigateFile(resolvedPath, headingTarget || undefined);
                     } else {
                       alert(`リンク先のノートが見つかりませんでした: "${noteTarget}"`);
                     }
                   }}
-                  className="inline-flex items-center gap-0.5 text-purple-400 hover:text-purple-300 font-medium underline decoration-purple-500/50 underline-offset-4 decoration-1 hover:decoration-2 transition-all cursor-pointer py-0.5 px-1 -mx-1 rounded hover:bg-purple-950/30"
-                  title={resolvedPath ? `移動: ${resolvedPath}` : `未作成: ${noteTarget}`}
+                  className={`inline text-left text-purple-400 hover:text-purple-300 font-medium underline underline-offset-4 decoration-1 hover:decoration-2 transition-all cursor-pointer py-0.5 px-0.5 rounded hover:bg-purple-950/30 ${
+                    resolvedPath || isSameNoteHeading
+                      ? 'decoration-purple-500/50'
+                      : 'opacity-60 decoration-dashed decoration-purple-400/40'
+                  }`}
+                  title={
+                    isSameNoteHeading
+                      ? `見出しへ移動: ${headingTarget}`
+                      : resolvedPath
+                      ? `移動: ${resolvedPath}${headingTarget ? ` (#${headingTarget})` : ''}`
+                      : `未作成: ${noteTarget}`
+                  }
                 >
-                  <span>{children}</span>
+                  {children}
                 </button>
               );
             }
 
-            // Normal external link
+            // 2. In-page anchor link: e.g. href="#some-heading"
+            if (href?.startsWith('#')) {
+              return (
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    scrollToHeading(href);
+                  }}
+                  className="inline text-purple-400 hover:text-purple-300 font-medium underline underline-offset-4 decoration-purple-500/50 cursor-pointer"
+                  {...props}
+                >
+                  {children}
+                </a>
+              );
+            }
+
+            // 3. Vault Markdown file link: e.g. [Link](another-note.md) or [Link](./folder/another-note.md)
+            const isExternal = /^https?:\/\//i.test(href || '') || /^mailto:/i.test(href || '') || /^tel:/i.test(href || '');
+            if (!isExternal && href) {
+              const [linkPath, linkHeading] = href.split('#');
+              const resolved = resolveWikiLinkPath(linkPath, allFilePaths, filePath);
+              if (resolved) {
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onNavigateFile(resolved, linkHeading || undefined);
+                    }}
+                    className="inline text-left text-purple-400 hover:text-purple-300 font-medium underline underline-offset-4 decoration-purple-500/50 decoration-1 hover:decoration-2 transition-all cursor-pointer py-0.5 px-0.5 rounded hover:bg-purple-950/30"
+                    title={`移動: ${resolved}`}
+                  >
+                    {children}
+                  </button>
+                );
+              }
+            }
+
+            // 4. Normal external link
             return (
               <a
                 href={href}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Header } from './components/Layout/Header';
 import { FileTreeDrawer } from './components/Drawers/FileTreeDrawer';
 import { TOCDrawer } from './components/Drawers/TOCDrawer';
@@ -42,6 +42,8 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSavingTasks, setIsSavingTasks] = useState<boolean>(false);
   const taskStatsRef = React.useRef({ total: 0, completed: 0, pendingChanges: 0 });
+  const mainScrollRef = useRef<HTMLElement>(null);
+  const pendingHeadingRef = useRef<string | null>(null);
 
   // Quick Append Input State
   const [quickNoteText, setQuickNoteText] = useState('');
@@ -373,11 +375,14 @@ export const App: React.FC = () => {
 
   // Safe navigation that guards against discarding uncommitted checklist changes
   const safeNavigateFile = useCallback(
-    (path: string) => {
+    (path: string, heading?: string) => {
       if (taskStatsRef.current.pendingChanges > 0) {
         if (!window.confirm('未保存のチェック変更があります。破棄して移動しますか？')) {
           return;
         }
+      }
+      if (heading) {
+        pendingHeadingRef.current = heading;
       }
       if (activeVaultRef.current) {
         const expectedSha = fileShaMapRef.current.get(path);
@@ -386,6 +391,31 @@ export const App: React.FC = () => {
     },
     [loadFileContent]
   );
+
+  // Auto-scroll to top when navigating to a new note (unless a heading anchor is targeted)
+  useEffect(() => {
+    if (!pendingHeadingRef.current && mainScrollRef.current) {
+      mainScrollRef.current.scrollTop = 0;
+    }
+  }, [activeFilePath]);
+
+  // Scroll to targeted heading after content is loaded
+  useEffect(() => {
+    if (pendingHeadingRef.current && content) {
+      const heading = pendingHeadingRef.current;
+      pendingHeadingRef.current = null;
+      setTimeout(() => {
+        const clean = heading.toLowerCase().trim();
+        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        for (const h of headings) {
+          if (h.textContent?.trim().toLowerCase().includes(clean)) {
+            h.scrollIntoView({ behavior: 'smooth' });
+            break;
+          }
+        }
+      }, 100);
+    }
+  }, [content]);
 
   // Note Navigation History & Recents Hook
   const { recentNotes, canGoBack, canGoForward, goBack, goForward } = useNoteHistory(
@@ -667,7 +697,7 @@ export const App: React.FC = () => {
         )}
 
         {/* Main Content Scroll Area */}
-        <main className={`flex-1 overflow-y-auto ${taskStats.total > 0 ? 'pb-32 sm:pb-28' : 'pb-24'}`}>
+        <main ref={mainScrollRef} className={`flex-1 overflow-y-auto ${taskStats.total > 0 ? 'pb-32 sm:pb-28' : 'pb-24'}`}>
           {error && (
             <div className="m-4 p-3 bg-rose-950/40 border border-rose-800 rounded-xl flex items-center gap-3 text-xs text-rose-300">
               <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
