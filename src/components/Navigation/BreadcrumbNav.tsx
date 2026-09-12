@@ -1,11 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, ChevronLeft, Folder, FileText, X, Layers } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Folder, FileText, X, Layers, History } from 'lucide-react';
 
 interface BreadcrumbNavProps {
   activeFilePath: string;
   allFilePaths: string[];
   onSelectFile: (path: string) => void;
+  onOpenHistory?: () => void;
 }
 
 interface BreadcrumbPart {
@@ -30,6 +31,7 @@ export const BreadcrumbNav: React.FC<BreadcrumbNavProps> = ({
   activeFilePath,
   allFilePaths,
   onSelectFile,
+  onOpenHistory,
 }) => {
   // Path for the folder whose contents are displayed in the bottom sheet
   const [selectedFolderForSheet, setSelectedFolderForSheet] = useState<string | null>(null);
@@ -123,75 +125,89 @@ export const BreadcrumbNav: React.FC<BreadcrumbNavProps> = ({
 
   return (
     <>
-      {/* Breadcrumb Strip */}
-      <nav
-        aria-label="Breadcrumb navigation"
-        className="flex items-center gap-1 px-3 py-1.5 bg-zinc-900/60 border-b border-obsidian-border text-xs text-zinc-400 overflow-x-auto no-scrollbar select-none"
-      >
-        {/* Root icon button */}
-        <button
-          type="button"
-          onClick={() => setSelectedFolderForSheet('')}
-          className="p-1 -ml-1 text-purple-400/80 hover:text-purple-300 hover:bg-purple-950/30 rounded transition-colors shrink-0"
-          title="ルート階層のフォルダ・ノートを表示"
+      {/* Breadcrumb Strip with History Button */}
+      <div className="flex items-center justify-between bg-zinc-900/60 border-b border-obsidian-border pr-2">
+        <nav
+          aria-label="Breadcrumb navigation"
+          className="flex items-center gap-1 px-3 py-1.5 text-xs text-zinc-400 overflow-x-auto no-scrollbar select-none flex-1 min-w-0"
         >
-          <Folder className="w-3.5 h-3.5" />
-        </button>
-
-        {/* If root file */}
-        {breadcrumbs.length === 1 && (
+          {/* Root icon button */}
           <button
             type="button"
             onClick={() => setSelectedFolderForSheet('')}
-            title="同じ階層（ルート）のノート・フォルダを表示"
-            className="inline-flex items-center gap-1 font-semibold text-purple-300 hover:text-purple-200 hover:bg-purple-950/40 px-1.5 py-0.5 rounded transition-colors truncate"
+            className="p-1 -ml-1 text-purple-400/80 hover:text-purple-300 hover:bg-purple-950/30 rounded transition-colors shrink-0"
+            title="ルート階層のフォルダ・ノートを表示"
           >
-            <span className="truncate">{breadcrumbs[0].name}</span>
-            <Layers className="w-3 h-3 text-purple-400/70 shrink-0" />
+            <Folder className="w-3.5 h-3.5" />
           </button>
-        )}
 
-        {/* If nested file */}
-        {breadcrumbs.length > 1 &&
-          breadcrumbs.map((crumb, idx) => {
-            const isLast = idx === breadcrumbs.length - 1;
+          {/* If root file */}
+          {breadcrumbs.length === 1 && (
+            <button
+              type="button"
+              onClick={() => setSelectedFolderForSheet('')}
+              title="同じ階層（ルート）のノート・フォルダを表示"
+              className="inline-flex items-center gap-1 font-semibold text-purple-300 hover:text-purple-200 hover:bg-purple-950/40 px-1.5 py-0.5 rounded transition-colors truncate"
+            >
+              <span className="truncate">{breadcrumbs[0].name}</span>
+              <Layers className="w-3 h-3 text-purple-400/70 shrink-0" />
+            </button>
+          )}
 
-            if (isLast) {
+          {/* If nested file */}
+          {breadcrumbs.length > 1 &&
+            breadcrumbs.map((crumb, idx) => {
+              const isLast = idx === breadcrumbs.length - 1;
+
+              if (isLast) {
+                return (
+                  <React.Fragment key={crumb.name}>
+                    <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFolderForSheet(currentParentDir)}
+                      title="同じフォルダのノートを表示"
+                      className="inline-flex items-center gap-1 font-semibold text-purple-300 hover:text-purple-200 hover:bg-purple-950/40 px-1.5 py-0.5 rounded transition-colors truncate max-w-[180px] sm:max-w-[300px]"
+                    >
+                      <span className="truncate">{crumb.name}</span>
+                      <Layers className="w-3 h-3 text-purple-400/70 shrink-0" />
+                    </button>
+                  </React.Fragment>
+                );
+              }
+
               return (
-                <React.Fragment key={crumb.name}>
-                  <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />
+                <React.Fragment key={crumb.fullDirPath}>
+                  {idx > 0 && <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />}
                   <button
                     type="button"
-                    onClick={() => setSelectedFolderForSheet(currentParentDir)}
-                    title="同じフォルダのノートを表示"
-                    className="inline-flex items-center gap-1 font-semibold text-purple-300 hover:text-purple-200 hover:bg-purple-950/40 px-1.5 py-0.5 rounded transition-colors truncate max-w-[180px] sm:max-w-[300px]"
+                    onClick={() => {
+                      // Open the parent folder of this crumb to show sibling folders
+                      const parentDir = crumb.fullDirPath.split('/').slice(0, -1).join('/');
+                      setSelectedFolderForSheet(parentDir);
+                    }}
+                    className="hover:text-zinc-200 hover:bg-zinc-800/80 px-1.5 py-0.5 rounded transition-colors truncate max-w-[120px]"
+                    title={`"${crumb.name}" と同じ階層のフォルダ一覧を表示`}
                   >
-                    <span className="truncate">{crumb.name}</span>
-                    <Layers className="w-3 h-3 text-purple-400/70 shrink-0" />
+                    {crumb.name}
                   </button>
                 </React.Fragment>
               );
-            }
+            })}
+        </nav>
 
-            return (
-              <React.Fragment key={crumb.fullDirPath}>
-                {idx > 0 && <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />}
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Open the parent folder of this crumb to show sibling folders
-                    const parentDir = crumb.fullDirPath.split('/').slice(0, -1).join('/');
-                    setSelectedFolderForSheet(parentDir);
-                  }}
-                  className="hover:text-zinc-200 hover:bg-zinc-800/80 px-1.5 py-0.5 rounded transition-colors truncate max-w-[120px]"
-                  title={`"${crumb.name}" と同じ階層のフォルダ一覧を表示`}
-                >
-                  {crumb.name}
-                </button>
-              </React.Fragment>
-            );
-          })}
-      </nav>
+        {onOpenHistory && (
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            title="このノートの変更履歴を表示"
+            className="flex items-center gap-1 px-2 py-1 ml-1 text-xs text-zinc-400 hover:text-purple-300 hover:bg-purple-950/40 border border-transparent hover:border-purple-800/40 rounded-lg transition-colors shrink-0 active:scale-95"
+          >
+            <History className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden sm:inline text-[11px] font-medium">履歴</span>
+          </button>
+        )}
+      </div>
 
       {/* Bottom Sheet Modal for drill-down navigation */}
       {selectedFolderForSheet !== null &&

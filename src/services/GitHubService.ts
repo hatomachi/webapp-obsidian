@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import { VaultConfig, FileNode, FileCacheEntry } from '../types';
+import { VaultConfig, FileNode, FileCacheEntry, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
 import { utf8ToBase64, base64ToUtf8 } from '../utils/encoding';
 
 export class GitHubService {
@@ -344,5 +344,140 @@ export class GitHubService {
     this.saveLocalCache(vault, cache);
 
     return { newSha };
+  }
+
+  private static diffCache = new Map<string, CommitFileDiff>();
+
+  /**
+   * Helper to detect commit type (AI, task toggle, or manual)
+   */
+  private static detectCommitType(message: string, authorName: string = ''): CommitType {
+    const lowerMsg = message.toLowerCase();
+    const lowerAuthor = authorName.toLowerCase();
+
+    // Checklist task toggle via this webapp
+    if (lowerMsg.includes('toggle task in') || lowerMsg.includes('via obsidian web')) {
+      return 'task_toggle';
+    }
+
+    // AI commit patterns (Antigravity, AI agent, strategy docs, etc.)
+    const aiKeywords = [
+      'antigravity',
+      'ai:',
+      'ai(',
+      '[ai]',
+      'docs(strategy)',
+      'update strategy',
+      '🤖',
+      'assistant',
+      'agent',
+      'copilot',
+      'gemini',
+      'claude',
+      'cursor',
+    ];
+    if (aiKeywords.some((kw) => lowerMsg.includes(kw))) {
+      return 'ai';
+    }
+
+    const aiAuthors = ['antigravity', 'bot', 'github-actions', 'ai'];
+    if (aiAuthors.some((auth) => lowerAuthor.includes(auth))) {
+      return 'ai';
+    }
+
+    return 'manual';
+  }
+
+  /**
+   * Fetch commit history for a specific file
+   */
+  static async fetchFileCommits(
+    vault: VaultConfig,
+    filePath: string,
+    perPage: number = 30
+  ): Promise<CommitHistoryItem[]> {
+    const octokit = this.getOctokit(vault.token);
+
+    const { data } = await octokit.repos.listCommits({
+      owner: vault.owner,
+      repo: vault.repo,
+      path: filePath,
+      sha: vault.branch || 'main',
+      per_page: perPage,
+      headers: {
+        'If-None-Match': '',
+      },
+    });
+
+    return data.map((item) => {
+      const fullMessage = item.commit.message || '';
+      const lines = fullMessage.split('\n');
+      const summary = lines[0] || '(No commit message)';
+      const description = lines.slice(1).join('\n').trim() || undefined;
+
+      const authorName = item.commit.author?.name || item.author?.login || 'Unknown';
+      const authorEmail = item.commit.author?.email || undefined;
+      const authorDate = item.commit.author?.date || item.commit.committer?.date || new Date().toISOString();
+      const authorAvatarUrl = item.author?.avatar_url || undefined;
+      const htmlUrl = item.html_url;
+
+      const commitType = this.detectCommitType(fullMessage, authorName);
+
+      return {
+        sha: item.sha,
+        shortSha: item.sha.slice(0, 7),
+        message: fullMessage,
+        summary,
+        description,
+        authorName,
+        authorEmail,
+        authorDate,
+        authorAvatarUrl,
+        htmlUrl,
+        commitType,
+      };
+    });
+  }
+
+  /**
+   * Fetch diff and changes for a specific file in a commit
+   */
+  static async fetchCommitFileDiff(
+    vault: VaultConfig,
+    commitSha: string,
+    filePath: string
+  ): Promise<CommitFileDiff | null> {
+    const cacheKey = `${vault.owner}/${vault.repo}/${commitSha}/${filePath}`;
+    if (this.diffCache.has(cacheKey)) {
+      return this.diffCache.get(cacheKey)!;
+    }
+
+    const octokit = this.getOctokit(vault.token);
+    const { data } = await octokit.repos.getCommit({
+      owner: vault.owner,
+      repo: vault.repo,
+      ref: commitSha,
+    });
+
+    const file = data.files?.find(
+      (f) => f.filename === filePath || f.previous_filename === filePath
+    );
+
+    if (!file) {
+      return null;
+    }
+
+    const diff: CommitFileDiff = {
+      sha: commitSha,
+      filename: file.filename,
+      status: file.status || 'modified',
+      additions: file.additions,
+      deletions: file.deletions,
+      changes: file.changes,
+      patch: file.patch,
+    };
+
+    this.diffCache.set(cacheKey, diff);
+    return diff;
   }
 }

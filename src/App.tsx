@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Header } from './components/Layout/Header';
 import { FileTreeDrawer } from './components/Drawers/FileTreeDrawer';
 import { TOCDrawer } from './components/Drawers/TOCDrawer';
+import { HistoryDrawer } from './components/Drawers/HistoryDrawer';
 import { QuickSwitcherModal } from './components/Modals/QuickSwitcherModal';
 import { EditModal } from './components/Modals/EditModal';
 import { SettingsModal } from './components/Modals/SettingsModal';
@@ -79,6 +80,7 @@ export const App: React.FC = () => {
     return typeof window !== 'undefined' && window.innerWidth >= 768;
   });
   const [isTOCOpen, setIsTOCOpen] = useState<boolean>(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
   const [isQuickSwitcherOpen, setIsQuickSwitcherOpen] = useState<boolean>(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -661,6 +663,7 @@ export const App: React.FC = () => {
               onSelectFile={(path) => {
                 safeNavigateFile(path);
               }}
+              onOpenHistory={() => setIsHistoryOpen(true)}
             />
           )}
           {uiPrefs.enableRecentNotes && (
@@ -813,6 +816,14 @@ export const App: React.FC = () => {
         isOpen={isTOCOpen}
         onClose={() => setIsTOCOpen(false)}
         tocList={currentTOC}
+        onOpenHistory={() => setIsHistoryOpen(true)}
+      />
+
+      <HistoryDrawer
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        vault={activeVault}
+        filePath={activeFilePath}
       />
 
       <QuickSwitcherModal

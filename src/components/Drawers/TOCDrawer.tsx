@@ -1,14 +1,15 @@
 import React from 'react';
-import { ListTree, X, Hash } from 'lucide-react';
+import { ListTree, X, Hash, History } from 'lucide-react';
 import { TOCItem } from '../../types';
 
 interface TOCDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   tocList: TOCItem[];
+  onOpenHistory?: () => void;
 }
 
-export const TOCDrawer: React.FC<TOCDrawerProps> = ({ isOpen, onClose, tocList }) => {
+export const TOCDrawer: React.FC<TOCDrawerProps> = ({ isOpen, onClose, tocList, onOpenHistory }) => {
   const handleScrollToHeading = (id: string) => {
     onClose();
     setTimeout(() => {
@@ -70,6 +71,23 @@ export const TOCDrawer: React.FC<TOCDrawerProps> = ({ isOpen, onClose, tocList }
             })
           )}
         </div>
+
+        {/* History Action Footer */}
+        {onOpenHistory && (
+          <div className="p-3 border-t border-obsidian-border bg-zinc-900/40">
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenHistory();
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-purple-950/40 hover:bg-purple-900/50 border border-purple-800/50 text-purple-300 text-xs font-medium transition-colors active:scale-95"
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>変更履歴を表示</span>
+            </button>
+          </div>
+        )}
       </aside>
     </div>
   );

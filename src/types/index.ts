@@ -40,3 +40,29 @@ export interface UIPreferences {
   enableRecentNotes: boolean;
   enableFooterNav: boolean;
 }
+
+export type CommitType = 'ai' | 'task_toggle' | 'manual';
+
+export interface CommitHistoryItem {
+  sha: string;
+  shortSha: string;
+  message: string;
+  summary: string;
+  description?: string;
+  authorName: string;
+  authorEmail?: string;
+  authorDate: string;
+  authorAvatarUrl?: string;
+  htmlUrl: string;
+  commitType: CommitType;
+}
+
+export interface CommitFileDiff {
+  sha: string;
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+}
