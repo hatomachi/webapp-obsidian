@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Search,
   X,
+  Loader2,
 } from 'lucide-react';
 import { FileNode } from '../../types';
 
@@ -14,6 +15,7 @@ interface FileTreeContentProps {
   fileTree: FileNode[];
   activeFilePath: string;
   onSelectFile: (path: string) => void;
+  onExpandFolder?: (node: FileNode) => Promise<void>;
   className?: string;
 }
 
@@ -21,9 +23,11 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
   fileTree,
   activeFilePath,
   onSelectFile,
+  onExpandFolder,
   className = '',
 }) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['']));
+  const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set());
   const [filterText, setFilterText] = useState('');
 
   // Automatically expand parent folders of the active file
@@ -43,16 +47,35 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
     });
   }, [activeFilePath]);
 
-  const toggleFolder = (path: string) => {
-    setExpandedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
+  const toggleFolder = async (node: FileNode) => {
+    const isCurrentlyExpanded = expandedFolders.has(node.path);
+
+    if (isCurrentlyExpanded) {
+      setExpandedFolders((prev) => {
+        const next = new Set(prev);
+        next.delete(node.path);
+        return next;
+      });
+      return;
+    }
+
+    // Expanding folder: if not loaded yet and has onExpandFolder, fetch on-demand
+    if (node.isLoaded === false && onExpandFolder) {
+      setLoadingFolders((prev) => new Set(prev).add(node.path));
+      try {
+        await onExpandFolder(node);
+      } catch (err) {
+        console.error('Failed to expand folder:', err);
+      } finally {
+        setLoadingFolders((prev) => {
+          const next = new Set(prev);
+          next.delete(node.path);
+          return next;
+        });
       }
-      return next;
-    });
+    }
+
+    setExpandedFolders((prev) => new Set(prev).add(node.path));
   };
 
   const renderNodes = (nodes: FileNode[], depth = 0) => {
@@ -74,16 +97,19 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
 
       if (isFolder) {
         const shouldExpand = filterText.trim() ? true : isExpanded;
+        const isFolderLoading = loadingFolders.has(node.path) || !!node.isLoading;
         return (
           <div key={node.path} className="select-none">
             <button
               type="button"
-              onClick={() => toggleFolder(node.path)}
+              onClick={() => toggleFolder(node)}
               style={{ paddingLeft: `${depth * 14 + 10}px` }}
               className="w-full flex items-center gap-2 py-2 px-2.5 text-xs text-zinc-300 hover:text-white hover:bg-obsidian-hover active:bg-zinc-800 rounded-lg transition-colors text-left group min-h-[38px]"
             >
               <span className="text-zinc-500 group-hover:text-zinc-300 p-0.5">
-                {shouldExpand ? (
+                {isFolderLoading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                ) : shouldExpand ? (
                   <ChevronDown className="w-3.5 h-3.5" />
                 ) : (
                   <ChevronRight className="w-3.5 h-3.5" />

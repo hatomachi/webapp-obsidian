@@ -73,12 +73,51 @@ export class GitHubService {
   }
 
   /**
-   * Fetch file tree recursively using Git Trees API
+   * Helper to get list of ignored folders
+   */
+  private static getIgnoredFolderList(vault: VaultConfig): string[] {
+    const defaultIgnored = ['.obsidian', '.git', '.github', '.vscode', '.trash'];
+    const userIgnored = (vault.ignoredFolders || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase().replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean);
+    return [...defaultIgnored, ...userIgnored];
+  }
+
+  /**
+   * Fetch file tree using Git Trees API.
+   * Supports lazy loading (root only) for huge repositories and auto-fallback on timeout.
    */
   static async fetchFileTree(vault: VaultConfig, force: boolean = false): Promise<FileNode[]> {
+    const isLazy = !!vault.lazyLoad;
+
+    // If lazyLoad is explicitly enabled, fetch only the root/top-level tree
+    if (isLazy) {
+      return this.fetchRootTreeOnly(vault, force);
+    }
+
+    // Otherwise try full recursive fetch, with timeout & fallback to lazy load if repository is huge
+    try {
+      return await this.fetchFullRecursiveTree(vault, force);
+    } catch (e: any) {
+      console.warn('Full recursive tree fetch failed or timed out. Falling back to lazy loading mode:', e);
+      // Automatically fallback to lazy loading so the user can still open the vault
+      return this.fetchRootTreeOnly(vault, force);
+    }
+  }
+
+  /**
+   * Fetch full recursive tree (for normal / moderate size vaults)
+   */
+  private static async fetchFullRecursiveTree(vault: VaultConfig, force: boolean): Promise<FileNode[]> {
     const octokit = this.getOctokit(vault.token);
     
-    // Prevent iOS Safari / CDN aggressive caching
+    // Timeout promise for huge repos
+    const timeoutMs = 12000;
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Git tree fetch timed out (>12s)')), timeoutMs)
+    );
+
     const requestHeaders: Record<string, string> = {
       'If-None-Match': '',
     };
@@ -87,7 +126,7 @@ export class GitHubService {
       requestHeaders['Pragma'] = 'no-cache';
     }
 
-    const { data } = await octokit.git.getTree({
+    const fetchPromise = octokit.git.getTree({
       owner: vault.owner,
       repo: vault.repo,
       tree_sha: vault.branch || 'main',
@@ -95,7 +134,9 @@ export class GitHubService {
       headers: requestHeaders,
     });
 
-    const ignoredPrefixes = ['.obsidian/', '.git/', '.github/', '.vscode/', '.trash/'];
+    const { data } = await Promise.race([fetchPromise, timeoutPromise]);
+
+    const ignoredList = this.getIgnoredFolderList(vault);
     
     const nodes: FileNode[] = [];
     const pathMap = new Map<string, FileNode>();
@@ -103,11 +144,12 @@ export class GitHubService {
     for (const item of data.tree) {
       if (!item.path || !item.sha) continue;
 
-      // Skip internal hidden/system directories
-      if (ignoredPrefixes.some((p) => item.path!.startsWith(p) || item.path!.includes('/' + p))) {
+      const parts = item.path.split('/');
+      
+      // Skip hidden files/folders or ignored folders
+      if (parts.some((p) => p.startsWith('.') || ignoredList.includes(p.toLowerCase()))) {
         continue;
       }
-      if (item.path.startsWith('.')) continue;
 
       const isTree = item.type === 'tree';
       // Only keep markdown or folders
@@ -115,7 +157,6 @@ export class GitHubService {
         continue;
       }
 
-      const parts = item.path.split('/');
       const fileName = parts[parts.length - 1];
 
       const node: FileNode = {
@@ -125,6 +166,7 @@ export class GitHubService {
         sha: item.sha,
         size: item.size,
         children: isTree ? [] : undefined,
+        isLoaded: true,
       };
 
       pathMap.set(item.path, node);
@@ -141,28 +183,129 @@ export class GitHubService {
         if (parentNode && parentNode.children) {
           parentNode.children.push(node);
         } else {
-          // Fallback if intermediate folder wasn't in tree
           nodes.push(node);
         }
       }
     }
 
-    // Sort: directories first, then alphabetical
-    const sortNodes = (list: FileNode[]) => {
-      list.sort((a, b) => {
-        if (a.type === 'tree' && b.type !== 'tree') return -1;
-        if (a.type !== 'tree' && b.type === 'tree') return 1;
-        return a.name.localeCompare(b.name, 'ja', { numeric: true });
-      });
-      for (const item of list) {
-        if (item.children) {
-          sortNodes(item.children);
-        }
-      }
-    };
-
-    sortNodes(nodes);
+    this.sortNodes(nodes);
     return nodes;
+  }
+
+  /**
+   * Fetch root/top-level tree only (for huge repositories, instant 0.1s start)
+   */
+  private static async fetchRootTreeOnly(vault: VaultConfig, force: boolean): Promise<FileNode[]> {
+    const octokit = this.getOctokit(vault.token);
+    const requestHeaders: Record<string, string> = {
+      'If-None-Match': '',
+    };
+    if (force) {
+      requestHeaders['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      requestHeaders['Pragma'] = 'no-cache';
+    }
+
+    const { data } = await octokit.git.getTree({
+      owner: vault.owner,
+      repo: vault.repo,
+      tree_sha: vault.branch || 'main',
+      // No recursive param: returns top level only!
+      headers: requestHeaders,
+    });
+
+    const ignoredList = this.getIgnoredFolderList(vault);
+    const nodes: FileNode[] = [];
+
+    for (const item of data.tree) {
+      if (!item.path || !item.sha) continue;
+
+      const pathLower = item.path.toLowerCase();
+      if (item.path.startsWith('.') || ignoredList.includes(pathLower)) {
+        continue;
+      }
+
+      const isTree = item.type === 'tree';
+      if (!isTree && !item.path.endsWith('.md')) {
+        continue;
+      }
+
+      nodes.push({
+        path: item.path,
+        name: item.path,
+        type: isTree ? 'tree' : 'blob',
+        sha: item.sha,
+        size: item.size,
+        children: isTree ? [] : undefined,
+        isLoaded: !isTree, // folders need lazy loading
+      });
+    }
+
+    this.sortNodes(nodes);
+    return nodes;
+  }
+
+  /**
+   * Fetch children of a specific directory on demand using its tree SHA
+   */
+  static async fetchDirectoryChildren(
+    vault: VaultConfig,
+    folderSha: string,
+    folderPath: string
+  ): Promise<FileNode[]> {
+    const octokit = this.getOctokit(vault.token);
+    const { data } = await octokit.git.getTree({
+      owner: vault.owner,
+      repo: vault.repo,
+      tree_sha: folderSha,
+    });
+
+    const ignoredList = this.getIgnoredFolderList(vault);
+    const children: FileNode[] = [];
+
+    for (const item of data.tree) {
+      if (!item.path || !item.sha) continue;
+
+      const fullPath = `${folderPath}/${item.path}`;
+      const pathLower = item.path.toLowerCase();
+
+      if (item.path.startsWith('.') || ignoredList.includes(pathLower)) {
+        continue;
+      }
+
+      const isTree = item.type === 'tree';
+      if (!isTree && !item.path.endsWith('.md')) {
+        continue;
+      }
+
+      children.push({
+        path: fullPath,
+        name: item.path,
+        type: isTree ? 'tree' : 'blob',
+        sha: item.sha,
+        size: item.size,
+        children: isTree ? [] : undefined,
+        isLoaded: !isTree,
+      });
+    }
+
+    this.sortNodes(children);
+    return children;
+  }
+
+  /**
+   * Helper to sort file tree nodes (directories first, then alphabetical)
+   */
+  private static sortNodes(list: FileNode[]): void {
+    list.sort((a, b) => {
+      if (a.type === 'tree' && b.type !== 'tree') return -1;
+      if (a.type !== 'tree' && b.type === 'tree') return 1;
+      return a.name.localeCompare(b.name, 'ja', { numeric: true });
+    });
+    for (const item of list) {
+      if (item.children && item.children.length > 0) {
+        this.sortNodes(item.children);
+      }
+    }
   }
 
   /**

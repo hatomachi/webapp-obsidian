@@ -9,6 +9,9 @@ import {
   Loader2,
   ShieldCheck,
   FolderSync,
+  ChevronDown,
+  ChevronRight,
+  Sliders,
 } from 'lucide-react';
 import { VaultConfig, UIPreferences, GitProvider } from '../../types';
 import { GitService } from '../../services/GitService';
@@ -52,6 +55,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [branch, setBranch] = useState('main');
   const [token, setToken] = useState('');
 
+  // Advanced / Huge Repository states
+  const [lazyLoad, setLazyLoad] = useState(false);
+  const [rootPath, setRootPath] = useState('');
+  const [ignoredFolders, setIgnoredFolders] = useState('attachments, assets, images');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   // Test connection state
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -68,6 +77,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRepo('');
     setBranch('main');
     setToken('');
+    setLazyLoad(false);
+    setRootPath('');
+    setIgnoredFolders('attachments, assets, images');
+    setShowAdvanced(false);
     setTestResult(null);
   };
 
@@ -81,6 +94,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setRepo(vault.repo);
     setBranch(vault.branch);
     setToken(vault.token);
+    setLazyLoad(!!vault.lazyLoad);
+    setRootPath(vault.rootPath || '');
+    setIgnoredFolders(vault.ignoredFolders || 'attachments, assets, images');
+    setShowAdvanced(!!vault.lazyLoad || !!vault.rootPath || (!!vault.ignoredFolders && vault.ignoredFolders !== 'attachments, assets, images'));
     setTestResult(null);
   };
 
@@ -145,6 +162,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       repo: repo.trim(),
       branch: branch.trim() || 'main',
       token: token.trim(),
+      lazyLoad: lazyLoad || undefined,
+      rootPath: rootPath.trim() || undefined,
+      ignoredFolders: ignoredFolders.trim() || undefined,
     };
 
     if (editingVaultId) {
@@ -238,6 +258,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         >
                           {isGitLab ? 'GitLab' : 'GitHub'}
                         </span>
+                        {v.lazyLoad && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-medium border border-amber-500/30">
+                            ⚡遅延ロード
+                          </span>
+                        )}
+                        {v.rootPath && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300 font-medium border border-zinc-700 truncate max-w-[100px]">
+                            📁{v.rootPath}
+                          </span>
+                        )}
                         {isActive && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-600/30 text-purple-300 font-medium border border-purple-500/40">
                             選択中
@@ -425,6 +455,93 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? 'GitLabの「read_api」および「write_repository」スコープが必要です。'
                       : 'リポジトリの「Contents: Read and write」権限が必要です。'}
                   </p>
+                </div>
+
+                {/* Advanced Settings for Huge Vaults (Lazy Load & Folders) */}
+                <div className="border border-zinc-800 rounded-xl bg-zinc-950/30 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced(!showAdvanced)}
+                    className="w-full flex items-center justify-between p-3 text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/40 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sliders className="w-3.5 h-3.5 text-purple-400" />
+                      <span>詳細設定（巨大リポジトリ・遅延ロード・除外）</span>
+                      {lazyLoad && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          遅延ロードON
+                        </span>
+                      )}
+                    </div>
+                    {showAdvanced ? (
+                      <ChevronDown className="w-4 h-4 text-zinc-400" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-zinc-400" />
+                    )}
+                  </button>
+
+                  {showAdvanced && (
+                    <div className="p-3.5 pt-0 space-y-3.5 border-t border-zinc-800/60 mt-1">
+                      {/* Lazy Load Toggle */}
+                      <div className="flex items-start justify-between gap-3 pt-2">
+                        <div>
+                          <label className="text-xs font-medium text-zinc-200 block">
+                            巨大Vault遅延読み込み（Lazy Load）
+                          </label>
+                          <p className="text-[11px] text-zinc-400 leading-tight mt-0.5">
+                            5GB規模や大量の写真・添付ファイルがあるVault向け。起動時にルート直下のみを取得し、フォルダ展開時にオンデマンド取得します。
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setLazyLoad(!lazyLoad)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            lazyLoad ? 'bg-purple-600' : 'bg-zinc-700'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                              lazyLoad ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Root Path */}
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-300 mb-1">
+                          起点フォルダ（Root Path）
+                        </label>
+                        <input
+                          type="text"
+                          value={rootPath}
+                          onChange={(e) => setRootPath(e.target.value)}
+                          placeholder="例: 00_Notes または docs (空欄ならリポジトリ全体)"
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:border-purple-500"
+                        />
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          Vault全体ではなく特定フォルダ配下のみを読み込みたい場合に指定します。
+                        </p>
+                      </div>
+
+                      {/* Ignored Folders */}
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-300 mb-1">
+                          除外フォルダ（Ignored Folders）
+                        </label>
+                        <input
+                          type="text"
+                          value={ignoredFolders}
+                          onChange={(e) => setIgnoredFolders(e.target.value)}
+                          placeholder="attachments, assets, images"
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:border-purple-500 font-mono"
+                        />
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          カンマ区切りで指定した名前のフォルダを探索から除外します（巨大メディアフォルダのスキップに有効）。
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

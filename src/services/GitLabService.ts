@@ -247,17 +247,48 @@ export class GitLabService {
   }
 
   /**
-   * Fetch file tree recursively using GitLab Repository Tree API with smart branch fallback
+   * Helper to get list of ignored folders
+   */
+  private static getIgnoredFolderList(vault: VaultConfig): string[] {
+    const defaultIgnored = ['.obsidian', '.git', '.gitlab', '.github', '.vscode', '.trash'];
+    const userIgnored = (vault.ignoredFolders || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase().replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean);
+    return [...defaultIgnored, ...userIgnored];
+  }
+
+  /**
+   * Fetch file tree using GitLab Repository Tree API.
+   * Supports lazy loading (root only) for huge repositories and auto-fallback on timeout.
    */
   static async fetchFileTree(vault: VaultConfig, force: boolean = false): Promise<FileNode[]> {
+    const isLazy = !!vault.lazyLoad;
+
+    if (isLazy) {
+      return this.fetchRootTreeOnly(vault, force);
+    }
+
+    try {
+      return await this.fetchFullRecursiveTree(vault, force);
+    } catch (e: any) {
+      console.warn('GitLab full tree fetch failed or timed out. Falling back to lazy loading mode:', e);
+      return this.fetchRootTreeOnly(vault, force);
+    }
+  }
+
+  /**
+   * Fetch full recursive tree for GitLab (with page limit & timeout guard)
+   */
+  private static async fetchFullRecursiveTree(vault: VaultConfig, force: boolean): Promise<FileNode[]> {
     const meta = await this.getProjectMetadata(vault);
     const projectId = meta.id;
 
     let targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
-
     let allItems: Array<{ id: string; name: string; type: string; path: string; mode: string }> = [];
     let page = 1;
     const perPage = 100;
+    const maxPages = 25; // Guard against 100+ pages of media
 
     const buildEndpoint = (p: number, b?: string) => {
       const refQuery = b ? `ref=${encodeURIComponent(b)}&` : '';
@@ -271,10 +302,9 @@ export class GitLabService {
         : undefined,
     });
 
-    // Smart fallback if branch resulted in 404 (e.g. branch is 'main' but repo is 'master')
+    // Smart fallback if branch resulted in 404
     if (!res.ok && res.status === 404) {
       console.warn(`GitLab tree 404 with ref="${targetBranch}", trying default branch...`);
-      // 1. Try without ref (server default branch)
       let fallbackRes = await this.apiFetch(vault, buildEndpoint(page), {
         headers: force
           ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
@@ -285,7 +315,6 @@ export class GitLabService {
         res = fallbackRes;
         targetBranch = '';
       } else if (meta.defaultBranch && meta.defaultBranch !== targetBranch) {
-        // 2. Try explicitly with meta.defaultBranch
         fallbackRes = await this.apiFetch(vault, buildEndpoint(page, meta.defaultBranch), {
           headers: force
             ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
@@ -304,11 +333,11 @@ export class GitLabService {
         const errJson = await res.json();
         if (errJson.message) errDetail += ` - ${errJson.message}`;
       } catch {}
-      throw new Error(`GitLabツリーの取得に失敗しました (${errDetail})。ブランチ名(${targetBranch || 'default'})やPATのread_repository権限をご確認ください。`);
+      throw new Error(`GitLabツリーの取得に失敗しました (${errDetail})。`);
     }
 
-    // Fetch all pages
-    while (true) {
+    // Fetch pages with max limit
+    while (page <= maxPages) {
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) {
         break;
@@ -325,6 +354,11 @@ export class GitLabService {
         page++;
       }
 
+      if (page > maxPages) {
+        console.warn(`GitLab tree exceeded max page limit (${maxPages}). Repository is too large for recursive fetch.`);
+        break;
+      }
+
       res = await this.apiFetch(vault, buildEndpoint(page, targetBranch), {
         headers: force
           ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
@@ -334,24 +368,23 @@ export class GitLabService {
       if (!res.ok) break;
     }
 
-    const ignoredPrefixes = ['.obsidian/', '.git/', '.gitlab/', '.github/', '.vscode/', '.trash/'];
+    const ignoredList = this.getIgnoredFolderList(vault);
     const nodes: FileNode[] = [];
     const pathMap = new Map<string, FileNode>();
 
     for (const item of allItems) {
       if (!item.path || !item.id) continue;
 
-      if (ignoredPrefixes.some((p) => item.path.startsWith(p) || item.path.includes('/' + p))) {
+      const parts = item.path.split('/');
+      if (parts.some((p) => p.startsWith('.') || ignoredList.includes(p.toLowerCase()))) {
         continue;
       }
-      if (item.path.startsWith('.')) continue;
 
       const isTree = item.type === 'tree';
       if (!isTree && !item.path.endsWith('.md')) {
         continue;
       }
 
-      const parts = item.path.split('/');
       const fileName = parts[parts.length - 1];
 
       const node: FileNode = {
@@ -360,6 +393,7 @@ export class GitLabService {
         type: isTree ? 'tree' : 'blob',
         sha: item.id,
         children: isTree ? [] : undefined,
+        isLoaded: true,
       };
 
       pathMap.set(item.path, node);
@@ -381,22 +415,131 @@ export class GitLabService {
       }
     }
 
-    // Sort: directories first, then alphabetical
-    const sortNodes = (list: FileNode[]) => {
-      list.sort((a, b) => {
-        if (a.type === 'tree' && b.type !== 'tree') return -1;
-        if (a.type !== 'tree' && b.type === 'tree') return 1;
-        return a.name.localeCompare(b.name, 'ja', { numeric: true });
-      });
-      for (const item of list) {
-        if (item.children) {
-          sortNodes(item.children);
-        }
-      }
-    };
-
-    sortNodes(nodes);
+    this.sortNodes(nodes);
     return nodes;
+  }
+
+  /**
+   * Fetch root/top-level tree only for GitLab
+   */
+  private static async fetchRootTreeOnly(vault: VaultConfig, force: boolean): Promise<FileNode[]> {
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
+    const targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
+
+    const refQuery = targetBranch ? `ref=${encodeURIComponent(targetBranch)}&` : '';
+    const endpoint = `/projects/${projectId}/repository/tree?${refQuery}recursive=false&per_page=100`;
+
+    const res = await this.apiFetch(vault, endpoint, {
+      headers: force
+        ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
+        : undefined,
+    });
+
+    if (!res.ok) {
+      throw new Error(`GitLabルートツリーの取得に失敗しました: ${res.status} ${res.statusText}`);
+    }
+
+    const items = await res.json();
+    const ignoredList = this.getIgnoredFolderList(vault);
+    const nodes: FileNode[] = [];
+
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        if (!item.path || !item.id) continue;
+
+        const pathLower = item.path.toLowerCase();
+        if (item.path.startsWith('.') || ignoredList.includes(pathLower)) {
+          continue;
+        }
+
+        const isTree = item.type === 'tree';
+        if (!isTree && !item.path.endsWith('.md')) {
+          continue;
+        }
+
+        nodes.push({
+          path: item.path,
+          name: item.name || item.path,
+          type: isTree ? 'tree' : 'blob',
+          sha: item.id,
+          children: isTree ? [] : undefined,
+          isLoaded: !isTree,
+        });
+      }
+    }
+
+    this.sortNodes(nodes);
+    return nodes;
+  }
+
+  /**
+   * Fetch children of a specific directory on demand in GitLab
+   */
+  static async fetchDirectoryChildren(
+    vault: VaultConfig,
+    folderPath: string
+  ): Promise<FileNode[]> {
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
+    const targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
+
+    const refQuery = targetBranch ? `ref=${encodeURIComponent(targetBranch)}&` : '';
+    const pathQuery = `path=${encodeURIComponent(folderPath)}&`;
+    const endpoint = `/projects/${projectId}/repository/tree?${refQuery}${pathQuery}recursive=false&per_page=100`;
+
+    const res = await this.apiFetch(vault, endpoint);
+    if (!res.ok) {
+      throw new Error(`GitLabディレクトリ "${folderPath}" の取得に失敗しました: ${res.status} ${res.statusText}`);
+    }
+
+    const items = await res.json();
+    const ignoredList = this.getIgnoredFolderList(vault);
+    const children: FileNode[] = [];
+
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        if (!item.path || !item.id) continue;
+
+        const pathLower = item.path.toLowerCase();
+        if (item.name?.startsWith('.') || ignoredList.includes(pathLower)) {
+          continue;
+        }
+
+        const isTree = item.type === 'tree';
+        if (!isTree && !item.path.endsWith('.md')) {
+          continue;
+        }
+
+        children.push({
+          path: item.path,
+          name: item.name || item.path.split('/').pop() || item.path,
+          type: isTree ? 'tree' : 'blob',
+          sha: item.id,
+          children: isTree ? [] : undefined,
+          isLoaded: !isTree,
+        });
+      }
+    }
+
+    this.sortNodes(children);
+    return children;
+  }
+
+  /**
+   * Helper to sort file tree nodes (directories first, then alphabetical)
+   */
+  private static sortNodes(list: FileNode[]): void {
+    list.sort((a, b) => {
+      if (a.type === 'tree' && b.type !== 'tree') return -1;
+      if (a.type !== 'tree' && b.type === 'tree') return 1;
+      return a.name.localeCompare(b.name, 'ja', { numeric: true });
+    });
+    for (const item of list) {
+      if (item.children && item.children.length > 0) {
+        this.sortNodes(item.children);
+      }
+    }
   }
 
   /**

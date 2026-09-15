@@ -40,6 +40,20 @@ export class GitService {
   }
 
   /**
+   * Fetch children of a folder on demand (lazy loading)
+   */
+  static async fetchDirectoryChildren(
+    vault: VaultConfig,
+    folderPath: string,
+    folderSha?: string
+  ): Promise<FileNode[]> {
+    if (this.isGitLab(vault)) {
+      return GitLabService.fetchDirectoryChildren(vault, folderPath);
+    }
+    return GitHubService.fetchDirectoryChildren(vault, folderSha || '', folderPath);
+  }
+
+  /**
    * Fetch file content with SWR cache
    */
   static async fetchFileContent(

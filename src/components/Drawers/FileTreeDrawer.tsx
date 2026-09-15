@@ -9,6 +9,7 @@ interface FileTreeDrawerProps {
   fileTree: FileNode[];
   activeFilePath: string;
   onSelectFile: (path: string) => void;
+  onExpandFolder?: (node: FileNode) => Promise<void>;
   activeVault: VaultConfig | null;
   onOpenSettings: () => void;
 }
@@ -19,6 +20,7 @@ export const FileTreeDrawer: React.FC<FileTreeDrawerProps> = ({
   fileTree,
   activeFilePath,
   onSelectFile,
+  onExpandFolder,
   activeVault,
   onOpenSettings,
 }) => {
@@ -62,6 +64,7 @@ export const FileTreeDrawer: React.FC<FileTreeDrawerProps> = ({
               onSelectFile(path);
               onClose();
             }}
+            onExpandFolder={onExpandFolder}
           />
         </div>
 

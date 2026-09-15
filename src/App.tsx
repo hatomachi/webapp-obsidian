@@ -208,6 +208,51 @@ export const App: React.FC = () => {
     []
   );
 
+  // Handle on-demand folder expansion (lazy loading for huge repos)
+  const handleExpandFolder = useCallback(
+    async (node: FileNode) => {
+      const vault = activeVaultRef.current;
+      if (!vault) return;
+
+      try {
+        const children = await GitService.fetchDirectoryChildren(vault, node.path, node.sha);
+
+        // Update tree immutably
+        const updateTree = (nodes: FileNode[]): FileNode[] => {
+          return nodes.map((n) => {
+            if (n.path === node.path) {
+              return {
+                ...n,
+                children,
+                isLoaded: true,
+              };
+            }
+            if (n.children && n.children.length > 0) {
+              return {
+                ...n,
+                children: updateTree(n.children),
+              };
+            }
+            return n;
+          });
+        };
+
+        setFileTree((prevTree) => updateTree(prevTree));
+
+        // Update sha map with newly loaded markdown files
+        for (const child of children) {
+          if (child.type === 'blob' && child.path.endsWith('.md') && child.sha) {
+            fileShaMapRef.current.set(child.path, child.sha);
+          }
+        }
+      } catch (e: any) {
+        console.error('Failed to load folder children:', e);
+        showToast(`フォルダ "${node.name}" の取得に失敗しました: ${e.message}`, 'error');
+      }
+    },
+    [showToast]
+  );
+
   // Fetch File Tree for active vault
   const loadFileTree = useCallback(
     async (vault: VaultConfig, force: boolean = false) => {
@@ -240,7 +285,7 @@ export const App: React.FC = () => {
         const currentTarget = currentPath && paths.includes(currentPath) ? currentPath : null;
         const targetFile =
           currentTarget ||
-          (lastFile && paths.includes(lastFile) ? lastFile : null) ||
+          (lastFile && (paths.includes(lastFile) || vault.lazyLoad) ? lastFile : null) ||
           (paths.length > 0
             ? paths.find((p) => p.toLowerCase().includes('index') || p.toLowerCase().includes('readme')) || paths[0]
             : null);
@@ -248,6 +293,15 @@ export const App: React.FC = () => {
         if (targetFile) {
           const expectedSha = shaMap.get(targetFile);
           await loadFileContent(vault, targetFile, expectedSha, force);
+        } else if (paths.length === 0 && (vault.lazyLoad || tree.some((n) => n.type === 'tree'))) {
+          setActiveFilePath('');
+          activeFilePathRef.current = '';
+          setContent(
+            '# 📂 Vault を開きました（遅延読み込みモード）\n\n' +
+            '左サイドバー（📁アイコン）からフォルダを展開して、ノートを選択してください。\n\n' +
+            '> [!TIP]\n' +
+            '> 巨大リポジトリに対応するため、フォルダを開いた時に必要な分だけ高速に読み込みます。'
+          );
         } else {
           setActiveFilePath('');
           activeFilePathRef.current = '';
@@ -690,6 +744,7 @@ export const App: React.FC = () => {
                 fileTree={fileTree}
                 activeFilePath={activeFilePath}
                 onSelectFile={safeNavigateFile}
+                onExpandFolder={handleExpandFolder}
               />
             </div>
             <div className="p-2.5 border-t border-obsidian-border bg-zinc-900/40 text-[11px] text-zinc-500 truncate flex items-center justify-between">
@@ -808,6 +863,7 @@ export const App: React.FC = () => {
         fileTree={fileTree}
         activeFilePath={activeFilePath}
         onSelectFile={safeNavigateFile}
+        onExpandFolder={handleExpandFolder}
         activeVault={activeVault}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />

@@ -9,6 +9,9 @@ export interface VaultConfig {
   repo: string;
   branch: string;
   token: string;
+  lazyLoad?: boolean;
+  rootPath?: string;
+  ignoredFolders?: string;
 }
 
 export interface FileNode {
@@ -18,6 +21,8 @@ export interface FileNode {
   sha: string;
   size?: number;
   children?: FileNode[];
+  isLoaded?: boolean;
+  isLoading?: boolean;
 }
 
 export interface FileCacheEntry {
