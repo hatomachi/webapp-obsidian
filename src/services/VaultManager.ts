@@ -90,9 +90,14 @@ export class VaultManager {
     }
   }
 
-  static clearVaultCache(owner: string, repo: string): void {
+  static clearVaultCache(owner: string, repo: string, provider?: string): void {
     try {
       localStorage.removeItem(`webapp_obsidian_file_cache_${owner}_${repo}`);
+      localStorage.removeItem(`webapp_obsidian_file_cache_github_${owner}_${repo}`);
+      localStorage.removeItem(`webapp_obsidian_file_cache_gitlab_${owner}_${repo}`);
+      if (provider) {
+        localStorage.removeItem(`webapp_obsidian_file_cache_${provider}_${owner}_${repo}`);
+      }
     } catch (e) {
       console.warn('Failed to clear cache:', e);
     }

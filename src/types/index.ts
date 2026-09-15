@@ -1,6 +1,10 @@
+export type GitProvider = 'github' | 'gitlab';
+
 export interface VaultConfig {
   id: string;
   name: string;
+  provider?: GitProvider;
+  baseUrl?: string;
   owner: string;
   repo: string;
   branch: string;

@@ -16,7 +16,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { VaultConfig, CommitHistoryItem, CommitFileDiff, CommitType } from '../../types';
-import { GitHubService } from '../../services/GitHubService';
+import { GitService } from '../../services/GitService';
 
 interface HistoryDrawerProps {
   isOpen: boolean;
@@ -171,7 +171,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const list = await GitHubService.fetchFileCommits(vault, filePath, 30);
+      const list = await GitService.fetchFileCommits(vault, filePath, 30);
       setCommits(list);
     } catch (err: any) {
       console.error('Failed to load file commits:', err);
@@ -203,7 +203,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
 
     setLoadingDiffSha(sha);
     try {
-      const diff = await GitHubService.fetchCommitFileDiff(vault, sha, filePath);
+      const diff = await GitService.fetchCommitFileDiff(vault, sha, filePath);
       if (diff) {
         setDiffMap((prev) => ({ ...prev, [sha]: diff }));
       }

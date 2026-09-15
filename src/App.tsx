@@ -8,7 +8,7 @@ import { EditModal } from './components/Modals/EditModal';
 import { SettingsModal } from './components/Modals/SettingsModal';
 import { MarkdownViewer } from './components/MarkdownViewer/MarkdownViewer';
 import { VaultManager } from './services/VaultManager';
-import { GitHubService } from './services/GitHubService';
+import { GitService } from './services/GitService';
 import { VaultConfig, FileNode, UIPreferences } from './types';
 import { extractTOC } from './utils/markdownUtils';
 import { extractTitle } from './utils/encoding';
@@ -154,7 +154,7 @@ export const App: React.FC = () => {
       localStorage.setItem(`webapp_obsidian_last_file_${vault.id}`, path);
 
       // SWR: 即座にローカルキャッシュを描画（0秒起動・画面遷移）
-      const cached = GitHubService.getCachedContent(vault, path);
+      const cached = GitService.getCachedContent(vault, path);
       if (cached && !force) {
         setContent(cached.content);
         setInitialContent(cached.content);
@@ -174,8 +174,8 @@ export const App: React.FC = () => {
           return;
         }
 
-        // GitHub API から最新コンテンツを取得（キャッシュなし、SHA不一致、または強制取得時）
-        const res = await GitHubService.fetchFileContent(vault, path, {
+        // Git API から最新コンテンツを取得（キャッシュなし、SHA不一致、または強制取得時）
+        const res = await GitService.fetchFileContent(vault, path, {
           fileSha: expectedSha,
           force,
         });
@@ -214,7 +214,7 @@ export const App: React.FC = () => {
       try {
         setIsRefreshing(true);
         setError(null);
-        const tree = await GitHubService.fetchFileTree(vault, force);
+        const tree = await GitService.fetchFileTree(vault, force);
         setFileTree(tree);
 
         // Extract file paths and sha mapping
@@ -269,7 +269,7 @@ export const App: React.FC = () => {
     const lastFileKey = `webapp_obsidian_last_file_${activeVault.id}`;
     const lastFile = localStorage.getItem(lastFileKey);
     if (lastFile && !content) {
-      const cached = GitHubService.getCachedContent(activeVault, lastFile);
+      const cached = GitService.getCachedContent(activeVault, lastFile);
       if (cached) {
         setActiveFilePath(lastFile);
         activeFilePathRef.current = lastFile;
@@ -473,14 +473,14 @@ export const App: React.FC = () => {
     }
   };
 
-  // Commit all task changes to GitHub as a single batch
+  // Commit all task changes to Git as a single batch
   const handleSaveTaskChanges = async () => {
     if (!activeVault || !activeFilePath) return;
 
     setIsSavingTasks(true);
     try {
-      showToast('チェック状態をGitHubへコミット中...', 'info');
-      const res = await GitHubService.saveFile(
+      showToast('チェック状態をコミット中...', 'info');
+      const res = await GitService.saveFile(
         activeVault,
         activeFilePath,
         content,
@@ -489,7 +489,7 @@ export const App: React.FC = () => {
       );
       setInitialContent(content);
       setCurrentSha(res.newSha);
-      showToast('GitHubへ反映しました', 'success');
+      showToast('リポジトリへ反映しました', 'success');
     } catch (e: any) {
       console.error('Task save failed:', e);
       showToast(`コミットに失敗しました: ${e.message}`, 'error');
@@ -546,7 +546,7 @@ export const App: React.FC = () => {
 
     try {
       showToast('メモを追記中...', 'info');
-      const res = await GitHubService.saveFile(
+      const res = await GitService.saveFile(
         activeVault,
         activeFilePath,
         updatedContent,
@@ -567,7 +567,7 @@ export const App: React.FC = () => {
   // Save from full edit modal
   const handleSaveFullEdit = async (newContent: string, commitMessage?: string) => {
     if (!activeVault || !activeFilePath) return;
-    const res = await GitHubService.saveFile(
+    const res = await GitService.saveFile(
       activeVault,
       activeFilePath,
       newContent,
@@ -602,8 +602,8 @@ export const App: React.FC = () => {
     showToast('Vaultを削除しました', 'info');
   };
 
-  const handleClearCache = (owner: string, repo: string) => {
-    VaultManager.clearVaultCache(owner, repo);
+  const handleClearCache = (owner: string, repo: string, provider?: string) => {
+    VaultManager.clearVaultCache(owner, repo, provider);
     if (activeVault) {
       loadFileTree(activeVault);
     }

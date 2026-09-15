@@ -10,8 +10,8 @@ import {
   ShieldCheck,
   FolderSync,
 } from 'lucide-react';
-import { VaultConfig, UIPreferences } from '../../types';
-import { GitHubService } from '../../services/GitHubService';
+import { VaultConfig, UIPreferences, GitProvider } from '../../types';
+import { GitService } from '../../services/GitService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -22,7 +22,7 @@ interface SettingsModalProps {
   onAddVault: (vault: Omit<VaultConfig, 'id'>) => void;
   onDeleteVault: (id: string) => void;
   onSelectVault: (id: string) => void;
-  onClearCache: (owner: string, repo: string) => void;
+  onClearCache: (owner: string, repo: string, provider?: string) => void;
   uiPrefs: UIPreferences;
   onUpdateUIPrefs: (prefs: UIPreferences) => void;
 }
@@ -44,6 +44,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [editingVaultId, setEditingVaultId] = useState<string | null>(null);
 
   // Form states
+  const [provider, setProvider] = useState<GitProvider>('github');
+  const [baseUrl, setBaseUrl] = useState('');
   const [name, setName] = useState('');
   const [owner, setOwner] = useState('');
   const [repo, setRepo] = useState('');
@@ -59,6 +61,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const startAdding = () => {
     setIsAdding(true);
     setEditingVaultId(null);
+    setProvider('github');
+    setBaseUrl('');
     setName('');
     setOwner('');
     setRepo('');
@@ -70,6 +74,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const startEditing = (vault: VaultConfig) => {
     setEditingVaultId(vault.id);
     setIsAdding(false);
+    setProvider(vault.provider || 'github');
+    setBaseUrl(vault.baseUrl || '');
     setName(vault.name);
     setOwner(vault.owner);
     setRepo(vault.repo);
@@ -79,8 +85,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleTestConnection = async () => {
-    if (!token || !owner || !repo) {
-      setTestResult({ success: false, message: 'Owner、Repo、Tokenを入力してください。' });
+    if (!token) {
+      setTestResult({ success: false, message: 'Tokenを入力してください。' });
+      return;
+    }
+    if (provider === 'github' && (!owner || !repo)) {
+      setTestResult({ success: false, message: 'Owner、Repoを入力してください。' });
+      return;
+    }
+    if (provider === 'gitlab' && !repo) {
+      setTestResult({ success: false, message: 'GitLabプロジェクト名（またはID）を入力してください。' });
       return;
     }
 
@@ -90,42 +104,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const tempVault: VaultConfig = {
       id: 'test',
       name: name || 'Test',
-      owner,
-      repo,
-      branch: branch || 'main',
-      token,
+      provider,
+      baseUrl: baseUrl.trim() || undefined,
+      owner: owner.trim(),
+      repo: repo.trim(),
+      branch: branch.trim() || 'main',
+      token: token.trim(),
     };
 
-    const res = await GitHubService.testConnection(tempVault);
+    const res = await GitService.testConnection(tempVault);
     setIsTesting(false);
     setTestResult(res);
   };
 
   const handleSaveForm = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !owner || !repo || !token) {
-      alert('すべての必須項目を入力してください。');
+    if (!name.trim() || !token.trim()) {
+      alert('Vault表示名とTokenは必須です。');
+      return;
+    }
+    if (provider === 'github' && (!owner.trim() || !repo.trim())) {
+      alert('GitHubの場合はOwnerとRepoの両方が必須です。');
+      return;
+    }
+    if (provider === 'gitlab' && !repo.trim()) {
+      alert('GitLabの場合はプロジェクト名（またはID）が必須です。');
       return;
     }
 
+    const vaultPayload = {
+      name: name.trim(),
+      provider,
+      baseUrl: baseUrl.trim() || undefined,
+      owner: owner.trim(),
+      repo: repo.trim(),
+      branch: branch.trim() || 'main',
+      token: token.trim(),
+    };
+
     if (editingVaultId) {
       onSaveVault({
+        ...vaultPayload,
         id: editingVaultId,
-        name,
-        owner,
-        repo,
-        branch: branch || 'main',
-        token,
       });
       setEditingVaultId(null);
     } else {
-      onAddVault({
-        name,
-        owner,
-        repo,
-        branch: branch || 'main',
-        token,
-      });
+      onAddVault(vaultPayload);
       setIsAdding(false);
     }
   };
@@ -141,7 +165,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 bg-zinc-950/40">
           <div className="flex items-center gap-2">
             <FolderSync className="w-5 h-5 text-purple-400" />
-            <h2 className="font-bold text-base text-zinc-100">Vault & GitHub 設定</h2>
+            <h2 className="font-bold text-base text-zinc-100">Vault & Git 設定</h2>
           </div>
           <button
             type="button"
@@ -159,7 +183,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <ShieldCheck className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
             <div className="leading-relaxed">
               <span className="font-semibold block mb-0.5">高セキュリティ＆プライベート設計</span>
-              GitHub PAT はこの端末のブラウザ（LocalStorage）にのみ保存され、外部サーバーやCloudflareには一切送信されません。スマホとGitHubが直接暗号化通信を行います。
+              Access Token はこの端末のブラウザ（LocalStorage）にのみ保存され、外部サーバーやCloudflareには一切送信されません。端末と GitHub / 社内GitLab が直接暗号化通信を行います。
             </div>
           </div>
 
@@ -184,6 +208,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="space-y-2">
               {vaults.map((v) => {
                 const isActive = v.id === activeVaultId;
+                const isGitLab = v.provider === 'gitlab';
                 return (
                   <div
                     key={v.id}
@@ -199,6 +224,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-sm text-zinc-100 truncate">{v.name}</span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                            isGitLab
+                              ? 'bg-orange-500/20 text-orange-300 border-orange-500/30'
+                              : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                          }`}
+                        >
+                          {isGitLab ? 'GitLab' : 'GitHub'}
+                        </span>
                         {isActive && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-600/30 text-purple-300 font-medium border border-purple-500/40">
                             選択中
@@ -206,7 +240,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         )}
                       </div>
                       <div className="text-xs text-zinc-400 truncate mt-0.5">
-                        {v.owner}/{v.repo} <span className="text-zinc-600">•</span> {v.branch}
+                        {isGitLab && v.baseUrl ? `${v.baseUrl.replace(/^https?:\/\//, '')} • ` : ''}
+                        {v.owner ? `${v.owner}/` : ''}{v.repo} <span className="text-zinc-600">•</span> {v.branch}
                       </div>
                     </div>
 
@@ -257,6 +292,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               <div className="space-y-3 text-xs">
+                {/* Provider Selector */}
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1.5">Git プロバイダー *</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProvider('github');
+                        setTestResult(null);
+                      }}
+                      className={`py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                        provider === 'github'
+                          ? 'border-purple-500 bg-purple-950/40 text-purple-200 shadow-sm'
+                          : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      <span>GitHub</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProvider('gitlab');
+                        setTestResult(null);
+                      }}
+                      className={`py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                        provider === 'gitlab'
+                          ? 'border-orange-500 bg-orange-950/40 text-orange-200 shadow-sm'
+                          : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      <span>GitLab (社内 / クラウド)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* GitLab Base URL */}
+                {provider === 'gitlab' && (
+                  <div>
+                    <label className="block text-zinc-300 font-medium mb-1">
+                      GitLab サーバー URL (Base URL) *
+                    </label>
+                    <input
+                      type="url"
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      placeholder="例: https://gitlab.internal.example.com"
+                      className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-orange-500 font-mono text-xs"
+                    />
+                    <p className="text-[10px] text-zinc-500 mt-1">
+                      空欄の場合は https://gitlab.com が使用されます。社内GitLabのURLを指定してください。
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-zinc-300 font-medium mb-1">Vault 表示名 *</label>
                   <input
@@ -264,31 +353,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="例: ジブリパーク旅行計画 / 個人タスク"
+                    placeholder={provider === 'gitlab' ? '例: 社内Wiki / プロジェクト進捗' : '例: ジブリパーク旅行計画 / 個人タスク'}
                     className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-zinc-300 font-medium mb-1">GitHub Owner *</label>
+                    <label className="block text-zinc-300 font-medium mb-1">
+                      {provider === 'gitlab' ? 'グループ / 名前空間' : 'GitHub Owner *'}
+                    </label>
                     <input
                       type="text"
-                      required
+                      required={provider === 'github'}
                       value={owner}
                       onChange={(e) => setOwner(e.target.value)}
-                      placeholder="例: hatomachi"
+                      placeholder={provider === 'gitlab' ? '例: dev-team (空欄可)' : '例: hatomachi'}
                       className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-zinc-300 font-medium mb-1">Repo 名 *</label>
+                    <label className="block text-zinc-300 font-medium mb-1">
+                      {provider === 'gitlab' ? 'プロジェクト名 / ID *' : 'Repo 名 *'}
+                    </label>
                     <input
                       type="text"
                       required
                       value={repo}
                       onChange={(e) => setRepo(e.target.value)}
-                      placeholder="例: 202609_ghibli-park"
+                      placeholder={provider === 'gitlab' ? '例: wiki-vault または 12345' : '例: 202609_ghibli-park'}
                       className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500"
                     />
                   </div>
@@ -307,19 +400,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-zinc-300 font-medium">GitHub Personal Access Token (PAT) *</label>
-                    <span className="text-[11px] text-zinc-500">Fine-grained PAT 推奨</span>
+                    <label className="text-zinc-300 font-medium">
+                      {provider === 'gitlab' ? 'GitLab Personal Access Token (PAT) *' : 'GitHub Personal Access Token (PAT) *'}
+                    </label>
+                    <span className="text-[11px] text-zinc-500">
+                      {provider === 'gitlab' ? 'read_api, write_repository' : 'Fine-grained PAT 推奨'}
+                    </span>
                   </div>
                   <input
                     type="password"
                     required
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
-                    placeholder="github_pat_..."
+                    placeholder={provider === 'gitlab' ? 'glpat-...' : 'github_pat_...'}
                     className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 font-mono text-xs focus:outline-none focus:border-purple-500"
                   />
                   <p className="text-[10px] text-zinc-500 mt-1">
-                    リポジトリの「Contents: Read and write」権限が必要です。
+                    {provider === 'gitlab'
+                      ? 'GitLabの「read_api」および「write_repository」スコープが必要です。'
+                      : 'リポジトリの「Contents: Read and write」権限が必要です。'}
                   </p>
                 </div>
               </div>
@@ -465,7 +564,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   onClick={() => {
                     const activeVault = vaults.find((v) => v.id === activeVaultId) || vaults[0];
                     if (activeVault) {
-                      onClearCache(activeVault.owner, activeVault.repo);
+                      onClearCache(activeVault.owner, activeVault.repo, activeVault.provider);
                       alert('キャッシュをクリアしました。次回読み込み時に最新を取得します。');
                     }
                   }}
