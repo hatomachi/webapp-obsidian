@@ -115,6 +115,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const res = await GitService.testConnection(tempVault);
     setIsTesting(false);
     setTestResult(res);
+
+    // If connection succeeded and a branch was detected (e.g. master instead of main), update form state
+    if (res.success && res.detectedBranch && res.detectedBranch !== branch) {
+      setBranch(res.detectedBranch);
+    }
   };
 
   const handleSaveForm = (e: React.FormEvent) => {

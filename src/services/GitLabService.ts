@@ -1,8 +1,17 @@
 import { VaultConfig, FileNode, FileCacheEntry, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
 import { utf8ToBase64, base64ToUtf8 } from '../utils/encoding';
 
+export interface GitLabProjectMetadata {
+  id: string;
+  defaultBranch: string;
+  emptyRepo: boolean;
+  name: string;
+  pathWithNamespace: string;
+  visibility: string;
+}
+
 export class GitLabService {
-  private static numericIdCache = new Map<string, string>();
+  private static metadataCache = new Map<string, GitLabProjectMetadata>();
 
   private static getCacheKey(vault: VaultConfig): string {
     const p = vault.provider || 'gitlab';
@@ -57,56 +66,6 @@ export class GitLabService {
   }
 
   /**
-   * Resolve numeric project ID to avoid %2F reverse proxy decoding issues in URLs
-   */
-  public static async resolveProjectId(vault: VaultConfig): Promise<string> {
-    const trimmedRepo = (vault.repo || '').trim();
-    // If repo is already a numeric ID, use it directly
-    if (/^\d+$/.test(trimmedRepo)) {
-      return trimmedRepo;
-    }
-
-    const cacheKey = `gitlab_numeric_id_${vault.baseUrl || 'gitlab'}_${vault.owner}_${vault.repo}`;
-    if (this.numericIdCache.has(cacheKey)) {
-      return this.numericIdCache.get(cacheKey)!;
-    }
-
-    try {
-      const saved = localStorage.getItem(cacheKey);
-      if (saved && /^\d+$/.test(saved)) {
-        this.numericIdCache.set(cacheKey, saved);
-        return saved;
-      }
-    } catch {
-      // ignore
-    }
-
-    // Query project info to obtain numeric ID
-    try {
-      const rawPath = this.getProjectId(vault);
-      const res = await this.apiFetch(vault, `/projects/${rawPath}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.id) {
-          const idStr = String(data.id);
-          this.numericIdCache.set(cacheKey, idStr);
-          try {
-            localStorage.setItem(cacheKey, idStr);
-          } catch {
-            // ignore
-          }
-          return idStr;
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to resolve GitLab numeric project ID:', e);
-    }
-
-    // Fallback to raw encoded path if resolution fails
-    return this.getProjectId(vault);
-  }
-
-  /**
    * Helper to perform GitLab API requests with proper headers
    */
   private static async apiFetch(
@@ -130,13 +89,68 @@ export class GitLabService {
   }
 
   /**
-   * Test connection to GitLab with Vault settings
+   * Fetch and cache project metadata (numeric ID, default branch, empty_repo status)
    */
-  static async testConnection(vault: VaultConfig): Promise<{ success: boolean; message: string; username?: string }> {
-    try {
-      const projectId = this.getProjectId(vault);
+  public static async getProjectMetadata(vault: VaultConfig): Promise<GitLabProjectMetadata> {
+    const cacheKey = `gitlab_meta_${vault.baseUrl || 'gitlab'}_${vault.owner}_${vault.repo}`;
+    if (this.metadataCache.has(cacheKey)) {
+      return this.metadataCache.get(cacheKey)!;
+    }
 
-      // 1. Check authenticated user info
+    // Try localStorage
+    try {
+      const saved = localStorage.getItem(cacheKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.id) {
+          this.metadataCache.set(cacheKey, parsed);
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const rawPath = this.getProjectId(vault);
+    const res = await this.apiFetch(vault, `/projects/${rawPath}`);
+    if (!res.ok) {
+      let errMsg = `${res.status} ${res.statusText}`;
+      try {
+        const errJson = await res.json();
+        if (errJson.message) errMsg += ` - ${errJson.message}`;
+      } catch {}
+      throw new Error(`GitLabプロジェクト "${rawPath}" の取得に失敗しました: ${errMsg}`);
+    }
+
+    const data = await res.json();
+    const meta: GitLabProjectMetadata = {
+      id: String(data.id),
+      defaultBranch: data.default_branch || 'master',
+      emptyRepo: !!data.empty_repo,
+      name: data.name || '',
+      pathWithNamespace: data.path_with_namespace || data.name || '',
+      visibility: data.visibility || 'Internal',
+    };
+
+    this.metadataCache.set(cacheKey, meta);
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify(meta));
+    } catch {}
+
+    return meta;
+  }
+
+  /**
+   * Comprehensive connection test: checks user, project, empty_repo, and actual repository access
+   */
+  static async testConnection(vault: VaultConfig): Promise<{
+    success: boolean;
+    message: string;
+    username?: string;
+    detectedBranch?: string;
+  }> {
+    try {
+      // 1. Check authenticated user
       const userRes = await this.apiFetch(vault, '/user');
       let username = 'Unknown User';
       if (userRes.ok) {
@@ -144,43 +158,76 @@ export class GitLabService {
         username = userData.username || userData.name || username;
       }
 
-      // 2. Check project accessibility
-      const projectRes = await this.apiFetch(vault, `/projects/${projectId}`);
-      if (!projectRes.ok) {
-        let errMsg = `プロジェクトへのアクセスに失敗しました (${projectRes.status} ${projectRes.statusText})`;
-        try {
-          const errData = await projectRes.json();
-          if (errData.message || errData.error) {
-            errMsg += `: ${errData.message || errData.error}`;
-          }
-        } catch {
-          // ignore
-        }
+      // 2. Check project
+      const meta = await this.getProjectMetadata(vault);
+
+      if (meta.emptyRepo) {
         return {
           success: false,
-          message: errMsg,
+          message: `プロジェクト「${meta.pathWithNamespace}」は接続成功しましたが、空のリポジトリ（コミットなし）です。初期コミットを作成してください。`,
+          username,
         };
       }
 
-      const project = await projectRes.json();
-      const visibility = project.visibility ? project.visibility : 'Internal';
+      // 3. Test actual repository access (tree endpoint)
+      // Candidate branches to try: vault.branch -> meta.defaultBranch -> master -> main
+      const candidateBranches: string[] = [];
+      if (vault.branch && vault.branch.trim()) {
+        candidateBranches.push(vault.branch.trim());
+      }
+      if (meta.defaultBranch && !candidateBranches.includes(meta.defaultBranch)) {
+        candidateBranches.push(meta.defaultBranch);
+      }
+      if (!candidateBranches.includes('master')) candidateBranches.push('master');
+      if (!candidateBranches.includes('main')) candidateBranches.push('main');
 
-      // Cache the numeric project ID immediately
-      if (project && project.id) {
-        const cacheKey = `gitlab_numeric_id_${vault.baseUrl || 'gitlab'}_${vault.owner}_${vault.repo}`;
-        const idStr = String(project.id);
-        this.numericIdCache.set(cacheKey, idStr);
-        try {
-          localStorage.setItem(cacheKey, idStr);
-        } catch {
-          // ignore
+      let treeSuccess = false;
+      let successfulBranch = '';
+      let lastError = '';
+
+      for (const b of candidateBranches) {
+        const testRes = await this.apiFetch(vault, `/projects/${meta.id}/repository/tree?ref=${encodeURIComponent(b)}&per_page=1`);
+        if (testRes.ok) {
+          treeSuccess = true;
+          successfulBranch = b;
+          break;
+        } else {
+          try {
+            const errData = await testRes.json();
+            lastError = errData.message || `${testRes.status} ${testRes.statusText}`;
+          } catch {
+            lastError = `${testRes.status} ${testRes.statusText}`;
+          }
         }
+      }
+
+      // If branch-specific query failed, try without ref parameter (GitLab defaults to project's default branch)
+      if (!treeSuccess) {
+        const testNoRefRes = await this.apiFetch(vault, `/projects/${meta.id}/repository/tree?per_page=1`);
+        if (testNoRefRes.ok) {
+          treeSuccess = true;
+          successfulBranch = meta.defaultBranch || 'master';
+        }
+      }
+
+      if (!treeSuccess) {
+        return {
+          success: false,
+          message: `プロジェクトは見つかりましたが、リポジトリへのアクセスでエラーになりました (${lastError})。PATに「read_repository」または「api」権限があるか、ブランチ名をご確認ください。`,
+          username,
+        };
+      }
+
+      let branchNotice = `ブランチ: ${successfulBranch}`;
+      if (vault.branch && vault.branch.trim() !== successfulBranch) {
+        branchNotice += ` (指定の "${vault.branch}" が無いため自動切替)`;
       }
 
       return {
         success: true,
-        message: `接続成功: ${project.path_with_namespace || project.name} (${visibility}) [ID: ${project.id}]`,
+        message: `接続成功: ${meta.pathWithNamespace} [ID: ${meta.id}] (${branchNotice})`,
         username,
+        detectedBranch: successfulBranch,
       };
     } catch (e: any) {
       console.error('GitLab connection test failed:', e);
@@ -200,36 +247,68 @@ export class GitLabService {
   }
 
   /**
-   * Fetch file tree recursively using GitLab Repository Tree API
+   * Fetch file tree recursively using GitLab Repository Tree API with smart branch fallback
    */
   static async fetchFileTree(vault: VaultConfig, force: boolean = false): Promise<FileNode[]> {
-    const projectId = await this.resolveProjectId(vault);
-    const branch = encodeURIComponent(vault.branch || 'main');
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
+
+    let targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
 
     let allItems: Array<{ id: string; name: string; type: string; path: string; mode: string }> = [];
     let page = 1;
     const perPage = 100;
 
-    // Fetch all pages
-    while (true) {
-      const endpoint = `/projects/${projectId}/repository/tree?ref=${branch}&recursive=true&per_page=${perPage}&page=${page}`;
-      const res = await this.apiFetch(vault, endpoint, {
+    const buildEndpoint = (p: number, b?: string) => {
+      const refQuery = b ? `ref=${encodeURIComponent(b)}&` : '';
+      return `/projects/${projectId}/repository/tree?${refQuery}recursive=true&per_page=${perPage}&page=${p}`;
+    };
+
+    // First page request
+    let res = await this.apiFetch(vault, buildEndpoint(page, targetBranch), {
+      headers: force
+        ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
+        : undefined,
+    });
+
+    // Smart fallback if branch resulted in 404 (e.g. branch is 'main' but repo is 'master')
+    if (!res.ok && res.status === 404) {
+      console.warn(`GitLab tree 404 with ref="${targetBranch}", trying default branch...`);
+      // 1. Try without ref (server default branch)
+      let fallbackRes = await this.apiFetch(vault, buildEndpoint(page), {
         headers: force
           ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
           : undefined,
       });
 
-      if (!res.ok) {
-        let errDetail = `${res.status} ${res.statusText}`;
-        try {
-          const errJson = await res.json();
-          if (errJson.message) errDetail += ` - ${errJson.message}`;
-        } catch {
-          // ignore
+      if (fallbackRes.ok) {
+        res = fallbackRes;
+        targetBranch = '';
+      } else if (meta.defaultBranch && meta.defaultBranch !== targetBranch) {
+        // 2. Try explicitly with meta.defaultBranch
+        fallbackRes = await this.apiFetch(vault, buildEndpoint(page, meta.defaultBranch), {
+          headers: force
+            ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
+            : undefined,
+        });
+        if (fallbackRes.ok) {
+          res = fallbackRes;
+          targetBranch = meta.defaultBranch;
         }
-        throw new Error(`GitLabツリーの取得に失敗しました: ${errDetail}`);
       }
+    }
 
+    if (!res.ok) {
+      let errDetail = `${res.status} ${res.statusText}`;
+      try {
+        const errJson = await res.json();
+        if (errJson.message) errDetail += ` - ${errJson.message}`;
+      } catch {}
+      throw new Error(`GitLabツリーの取得に失敗しました (${errDetail})。ブランチ名(${targetBranch || 'default'})やPATのread_repository権限をご確認ください。`);
+    }
+
+    // Fetch all pages
+    while (true) {
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) {
         break;
@@ -237,7 +316,6 @@ export class GitLabService {
 
       allItems = allItems.concat(items);
 
-      // Check if there are more pages
       const nextPage = res.headers.get('x-next-page');
       if (nextPage && parseInt(nextPage, 10) > page) {
         page = parseInt(nextPage, 10);
@@ -246,6 +324,14 @@ export class GitLabService {
       } else {
         page++;
       }
+
+      res = await this.apiFetch(vault, buildEndpoint(page, targetBranch), {
+        headers: force
+          ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
+          : undefined,
+      });
+
+      if (!res.ok) break;
     }
 
     const ignoredPrefixes = ['.obsidian/', '.git/', '.gitlab/', '.github/', '.vscode/', '.trash/'];
@@ -255,14 +341,12 @@ export class GitLabService {
     for (const item of allItems) {
       if (!item.path || !item.id) continue;
 
-      // Skip internal hidden/system directories
       if (ignoredPrefixes.some((p) => item.path.startsWith(p) || item.path.includes('/' + p))) {
         continue;
       }
       if (item.path.startsWith('.')) continue;
 
       const isTree = item.type === 'tree';
-      // Only keep markdown or folders
       if (!isTree && !item.path.endsWith('.md')) {
         continue;
       }
@@ -292,7 +376,6 @@ export class GitLabService {
         if (parentNode && parentNode.children) {
           parentNode.children.push(node);
         } else {
-          // Fallback if intermediate folder wasn't in tree
           nodes.push(node);
         }
       }
@@ -339,48 +422,31 @@ export class GitLabService {
       };
     }
 
-    const projectId = await this.resolveProjectId(vault);
-    const branch = encodeURIComponent(vault.branch || 'main');
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
+    const branch = encodeURIComponent(vault.branch?.trim() || meta.defaultBranch || 'master');
     const encodedFilePath = encodeURIComponent(filePath);
 
     // 1. Try standard repository files API
     const endpoint = `/projects/${projectId}/repository/files/${encodedFilePath}?ref=${branch}`;
-    const res = await this.apiFetch(vault, endpoint, {
+    let res = await this.apiFetch(vault, endpoint, {
       headers: force
         ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
         : undefined,
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      let utf8Content = '';
-
-      if (data.encoding === 'base64' && data.content) {
-        utf8Content = base64ToUtf8(data.content);
-      } else if (typeof data.content === 'string') {
-        utf8Content = data.content;
+    // If 404, try with meta.defaultBranch if different
+    if (!res.ok && res.status === 404 && meta.defaultBranch && branch !== encodeURIComponent(meta.defaultBranch)) {
+      const fallbackEndpoint = `/projects/${projectId}/repository/files/${encodedFilePath}?ref=${encodeURIComponent(meta.defaultBranch)}`;
+      const fallbackRes = await this.apiFetch(vault, fallbackEndpoint);
+      if (fallbackRes.ok) {
+        res = fallbackRes;
       }
-
-      const fileShaResult = data.blob_id || data.last_commit_id || data.commit_id || '';
-
-      // Save to cache
-      cache[filePath] = {
-        sha: fileShaResult,
-        content: utf8Content,
-        updatedAt: Date.now(),
-      };
-      this.saveLocalCache(vault, cache);
-
-      return {
-        content: utf8Content,
-        sha: fileShaResult,
-        fromCache: false,
-      };
     }
 
     // 2. Fallback: If 404 (commonly triggered when reverse proxies decode %2F in filePath) and we have fileSha from tree,
     // fetch raw blob directly via /repository/blobs/:sha/raw (pure hash, no %2F or slashes in URL!)
-    if (res.status === 404 && fileSha) {
+    if (!res.ok && res.status === 404 && fileSha) {
       const blobEndpoint = `/projects/${projectId}/repository/blobs/${encodeURIComponent(fileSha)}/raw`;
       const blobRes = await this.apiFetch(vault, blobEndpoint, {
         headers: force
@@ -405,14 +471,39 @@ export class GitLabService {
       }
     }
 
-    let errDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson.message) errDetail += ` - ${errJson.message}`;
-    } catch {
-      // ignore
+    if (!res.ok) {
+      let errDetail = `${res.status} ${res.statusText}`;
+      try {
+        const errJson = await res.json();
+        if (errJson.message) errDetail += ` - ${errJson.message}`;
+      } catch {}
+      throw new Error(`GitLabファイルの取得に失敗しました: ${errDetail}`);
     }
-    throw new Error(`GitLabファイルの取得に失敗しました: ${errDetail}`);
+
+    const data = await res.json();
+    let utf8Content = '';
+
+    if (data.encoding === 'base64' && data.content) {
+      utf8Content = base64ToUtf8(data.content);
+    } else if (typeof data.content === 'string') {
+      utf8Content = data.content;
+    }
+
+    const fileShaResult = data.blob_id || data.last_commit_id || data.commit_id || '';
+
+    // Save to cache
+    cache[filePath] = {
+      sha: fileShaResult,
+      content: utf8Content,
+      updatedAt: Date.now(),
+    };
+    this.saveLocalCache(vault, cache);
+
+    return {
+      content: utf8Content,
+      sha: fileShaResult,
+      fromCache: false,
+    };
   }
 
   /**
@@ -425,10 +516,11 @@ export class GitLabService {
     _currentSha?: string,
     commitMessage?: string
   ): Promise<{ newSha: string }> {
-    const projectId = await this.resolveProjectId(vault);
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
     const encodedFilePath = encodeURIComponent(filePath);
     const base64Content = utf8ToBase64(newContent);
-    const branch = vault.branch || 'main';
+    const branch = vault.branch?.trim() || meta.defaultBranch || 'master';
 
     const payload = {
       branch,
@@ -449,7 +541,6 @@ export class GitLabService {
     // If 404: file might not exist yet, OR reverse proxy decoded %2F in URL path.
     // Try GitLab Commits API (which places file_path in request body JSON, avoiding URL %2F issues completely)
     if (res.status === 404) {
-      // First try update action via Commits API
       const updateCommitPayload = {
         branch,
         commit_message: commitMessage || `docs: update ${filePath} via Obsidian Web`,
@@ -474,7 +565,6 @@ export class GitLabService {
       if (commitRes.ok) {
         res = commitRes;
       } else {
-        // If update failed, try create action via Commits API
         const createCommitPayload = {
           branch,
           commit_message: commitMessage || `docs: create ${filePath} via Obsidian Web`,
@@ -507,9 +597,7 @@ export class GitLabService {
       try {
         const errJson = await res.json();
         if (errJson.message) errDetail += ` - ${errJson.message}`;
-      } catch {
-        // ignore
-      }
+      } catch {}
       throw new Error(`GitLabファイルの保存に失敗しました: ${errDetail}`);
     }
 
@@ -584,8 +672,9 @@ export class GitLabService {
     filePath: string,
     perPage: number = 30
   ): Promise<CommitHistoryItem[]> {
-    const projectId = await this.resolveProjectId(vault);
-    const branch = encodeURIComponent(vault.branch || 'main');
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
+    const branch = encodeURIComponent(vault.branch?.trim() || meta.defaultBranch || 'master');
     const encodedFilePath = encodeURIComponent(filePath);
 
     const endpoint = `/projects/${projectId}/repository/commits?path=${encodedFilePath}&ref_name=${branch}&per_page=${perPage}`;
@@ -638,7 +727,8 @@ export class GitLabService {
       return this.diffCache.get(cacheKey)!;
     }
 
-    const projectId = await this.resolveProjectId(vault);
+    const meta = await this.getProjectMetadata(vault);
+    const projectId = meta.id;
     const endpoint = `/projects/${projectId}/repository/commits/${encodeURIComponent(commitSha)}/diff`;
     const res = await this.apiFetch(vault, endpoint);
 
@@ -659,7 +749,6 @@ export class GitLabService {
       return null;
     }
 
-    // Count additions and deletions from patch
     let additions = 0;
     let deletions = 0;
     const patch = fileDiff.diff || '';

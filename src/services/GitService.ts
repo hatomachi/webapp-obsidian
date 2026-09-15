@@ -12,7 +12,7 @@ export class GitService {
    */
   static async testConnection(
     vault: VaultConfig
-  ): Promise<{ success: boolean; message: string; username?: string }> {
+  ): Promise<{ success: boolean; message: string; username?: string; detectedBranch?: string }> {
     if (this.isGitLab(vault)) {
       return GitLabService.testConnection(vault);
     }
