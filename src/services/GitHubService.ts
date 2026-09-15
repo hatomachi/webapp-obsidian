@@ -225,7 +225,7 @@ export class GitHubService {
       }
 
       const isTree = item.type === 'tree';
-      if (!isTree && !item.path.endsWith('.md')) {
+      if (!isTree && !item.path.toLowerCase().endsWith('.md')) {
         continue;
       }
 
@@ -273,7 +273,7 @@ export class GitHubService {
       }
 
       const isTree = item.type === 'tree';
-      if (!isTree && !item.path.endsWith('.md')) {
+      if (!isTree && !item.path.toLowerCase().endsWith('.md')) {
         continue;
       }
 

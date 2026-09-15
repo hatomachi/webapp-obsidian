@@ -355,8 +355,8 @@ export class GitLabService {
       }
 
       if (page > maxPages) {
-        console.warn(`GitLab tree exceeded max page limit (${maxPages}). Repository is too large for recursive fetch.`);
-        break;
+        console.warn(`GitLab tree exceeded max page limit (${maxPages}). Repository is too large for recursive fetch. Falling back to lazy load.`);
+        throw new Error(`リポジトリの項目数が多すぎるため（${maxPages * perPage}件超過）、遅延読み込みモードに自動切替します。`);
       }
 
       res = await this.apiFetch(vault, buildEndpoint(page, targetBranch), {
@@ -485,40 +485,64 @@ export class GitLabService {
     const targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
 
     const refQuery = targetBranch ? `ref=${encodeURIComponent(targetBranch)}&` : '';
-    const pathQuery = `path=${encodeURIComponent(folderPath)}&`;
-    const endpoint = `/projects/${projectId}/repository/tree?${refQuery}${pathQuery}recursive=false&per_page=100`;
+    // Preserve slashes while encoding special characters in folder names
+    const cleanPath = folderPath
+      .split('/')
+      .map((p) => encodeURIComponent(p))
+      .join('/');
+    const pathQuery = `path=${cleanPath}&`;
 
-    const res = await this.apiFetch(vault, endpoint);
-    if (!res.ok) {
-      throw new Error(`GitLabディレクトリ "${folderPath}" の取得に失敗しました: ${res.status} ${res.statusText}`);
-    }
-
-    const items = await res.json();
     const ignoredList = this.getIgnoredFolderList(vault);
     const children: FileNode[] = [];
+    let page = 1;
+    const maxDirPages = 5; // Allow up to 500 items per directory
 
-    if (Array.isArray(items)) {
+    while (page <= maxDirPages) {
+      const endpoint = `/projects/${projectId}/repository/tree?${refQuery}${pathQuery}recursive=false&per_page=100&page=${page}`;
+      const res = await this.apiFetch(vault, endpoint);
+      if (!res.ok) {
+        if (page === 1) {
+          throw new Error(`GitLabディレクトリ "${folderPath}" の取得に失敗しました: ${res.status} ${res.statusText}`);
+        }
+        break;
+      }
+
+      const items = await res.json();
+      if (!Array.isArray(items) || items.length === 0) {
+        break;
+      }
+
       for (const item of items) {
         if (!item.path || !item.id) continue;
 
-        const pathLower = item.path.toLowerCase();
-        if (item.name?.startsWith('.') || ignoredList.includes(pathLower)) {
+        const itemName = item.name || item.path.split('/').pop() || item.path;
+
+        if (itemName.startsWith('.') || ignoredList.includes(itemName.toLowerCase())) {
           continue;
         }
 
         const isTree = item.type === 'tree';
-        if (!isTree && !item.path.endsWith('.md')) {
+        if (!isTree && !itemName.toLowerCase().endsWith('.md')) {
           continue;
         }
 
         children.push({
           path: item.path,
-          name: item.name || item.path.split('/').pop() || item.path,
+          name: itemName,
           type: isTree ? 'tree' : 'blob',
           sha: item.id,
           children: isTree ? [] : undefined,
           isLoaded: !isTree,
         });
+      }
+
+      const nextPage = res.headers.get('x-next-page');
+      if (nextPage && parseInt(nextPage, 10) > page) {
+        page = parseInt(nextPage, 10);
+      } else if (items.length < 100) {
+        break;
+      } else {
+        page++;
       }
     }
 

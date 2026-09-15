@@ -278,6 +278,11 @@ export const App: React.FC = () => {
 
         fileShaMapRef.current = shaMap;
 
+        const isLazyActive = !!vault.lazyLoad || tree.some((n) => n.type === 'tree' && n.isLoaded === false);
+        if (isLazyActive && !vault.lazyLoad) {
+          showToast('巨大Vaultのため、フォルダ遅延読み込みモードで表示しました', 'info');
+        }
+
         const lastFileKey = `webapp_obsidian_last_file_${vault.id}`;
         const lastFile = localStorage.getItem(lastFileKey);
 
