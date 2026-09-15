@@ -293,6 +293,17 @@ export class GitHubService {
   }
 
   /**
+   * Fetch more items for a directory or root (Load More)
+   */
+  static async fetchMoreItems(
+    _vault: VaultConfig,
+    _parentPath: string,
+    _page: number
+  ): Promise<FileNode[]> {
+    return [];
+  }
+
+  /**
    * Helper to sort file tree nodes (directories first, then alphabetical)
    */
   private static sortNodes(list: FileNode[]): void {

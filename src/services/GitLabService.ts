@@ -422,13 +422,20 @@ export class GitLabService {
   /**
    * Fetch root/top-level tree only for GitLab
    */
-  private static async fetchRootTreeOnly(vault: VaultConfig, force: boolean): Promise<FileNode[]> {
+  /**
+   * Fetch root/top-level tree only for GitLab with load_more support
+   */
+  private static async fetchRootTreeOnly(
+    vault: VaultConfig,
+    force: boolean,
+    page: number = 1
+  ): Promise<FileNode[]> {
     const meta = await this.getProjectMetadata(vault);
     const projectId = meta.id;
     const targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
 
     const refQuery = targetBranch ? `ref=${encodeURIComponent(targetBranch)}&` : '';
-    const endpoint = `/projects/${projectId}/repository/tree?${refQuery}recursive=false&per_page=100`;
+    const endpoint = `/projects/${projectId}/repository/tree?${refQuery}recursive=false&per_page=100&page=${page}`;
 
     const res = await this.apiFetch(vault, endpoint, {
       headers: force
@@ -448,19 +455,19 @@ export class GitLabService {
       for (const item of items) {
         if (!item.path || !item.id) continue;
 
-        const pathLower = item.path.toLowerCase();
-        if (item.path.startsWith('.') || ignoredList.includes(pathLower)) {
+        const itemName = item.name || item.path.split('/').pop() || item.path;
+        if (itemName.startsWith('.') || ignoredList.includes(itemName.toLowerCase())) {
           continue;
         }
 
         const isTree = item.type === 'tree';
-        if (!isTree && !item.path.endsWith('.md')) {
+        if (!isTree && !itemName.toLowerCase().endsWith('.md')) {
           continue;
         }
 
         nodes.push({
           path: item.path,
-          name: item.name || item.path,
+          name: itemName,
           type: isTree ? 'tree' : 'blob',
           sha: item.id,
           children: isTree ? [] : undefined,
@@ -470,22 +477,39 @@ export class GitLabService {
     }
 
     this.sortNodes(nodes);
+
+    // If there are more pages, append a load_more virtual node
+    const nextPageHeader = res.headers.get('x-next-page');
+    if (nextPageHeader) {
+      const nextPageNum = parseInt(nextPageHeader, 10);
+      if (nextPageNum > page) {
+        nodes.push({
+          path: `__root__load_more_${nextPageNum}`,
+          name: 'さらに読み込む...',
+          type: 'load_more',
+          sha: '',
+          nextPage: nextPageNum,
+          parentPath: '',
+        });
+      }
+    }
+
     return nodes;
   }
 
   /**
-   * Fetch children of a specific directory on demand in GitLab
+   * Fetch children of a specific directory on demand in GitLab with load_more support
    */
   static async fetchDirectoryChildren(
     vault: VaultConfig,
-    folderPath: string
+    folderPath: string,
+    startPage: number = 1
   ): Promise<FileNode[]> {
     const meta = await this.getProjectMetadata(vault);
     const projectId = meta.id;
     const targetBranch = (vault.branch || '').trim() || meta.defaultBranch || 'master';
 
     const refQuery = targetBranch ? `ref=${encodeURIComponent(targetBranch)}&` : '';
-    // Preserve slashes while encoding special characters in folder names
     const cleanPath = folderPath
       .split('/')
       .map((p) => encodeURIComponent(p))
@@ -494,14 +518,15 @@ export class GitLabService {
 
     const ignoredList = this.getIgnoredFolderList(vault);
     const children: FileNode[] = [];
-    let page = 1;
-    const maxDirPages = 5; // Allow up to 500 items per directory
+    let page = startPage;
+    const maxFetchPages = 2; // Fetch up to 2 pages (200 items) per click to find markdown files
+    let lastNextPage: number | null = null;
 
-    while (page <= maxDirPages) {
+    for (let i = 0; i < maxFetchPages; i++) {
       const endpoint = `/projects/${projectId}/repository/tree?${refQuery}${pathQuery}recursive=false&per_page=100&page=${page}`;
       const res = await this.apiFetch(vault, endpoint);
       if (!res.ok) {
-        if (page === 1) {
+        if (i === 0 && startPage === 1) {
           throw new Error(`GitLabディレクトリ "${folderPath}" の取得に失敗しました: ${res.status} ${res.statusText}`);
         }
         break;
@@ -509,6 +534,7 @@ export class GitLabService {
 
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) {
+        lastNextPage = null;
         break;
       }
 
@@ -516,7 +542,6 @@ export class GitLabService {
         if (!item.path || !item.id) continue;
 
         const itemName = item.name || item.path.split('/').pop() || item.path;
-
         if (itemName.startsWith('.') || ignoredList.includes(itemName.toLowerCase())) {
           continue;
         }
@@ -536,18 +561,49 @@ export class GitLabService {
         });
       }
 
-      const nextPage = res.headers.get('x-next-page');
-      if (nextPage && parseInt(nextPage, 10) > page) {
-        page = parseInt(nextPage, 10);
-      } else if (items.length < 100) {
-        break;
+      const nextPageHeader = res.headers.get('x-next-page');
+      if (nextPageHeader && parseInt(nextPageHeader, 10) > page) {
+        lastNextPage = parseInt(nextPageHeader, 10);
+        page = lastNextPage;
+        // If we already found some markdown files in this pass, stop and show load_more
+        if (children.some((c) => c.type === 'blob')) {
+          break;
+        }
       } else {
-        page++;
+        lastNextPage = null;
+        break;
       }
     }
 
     this.sortNodes(children);
+
+    // If more pages exist, append load_more virtual node
+    if (lastNextPage) {
+      children.push({
+        path: `${folderPath}__load_more_${lastNextPage}`,
+        name: 'さらに読み込む...',
+        type: 'load_more',
+        sha: '',
+        nextPage: lastNextPage,
+        parentPath: folderPath,
+      });
+    }
+
     return children;
+  }
+
+  /**
+   * Fetch more items for a directory or root (Load More)
+   */
+  static async fetchMoreItems(
+    vault: VaultConfig,
+    parentPath: string,
+    page: number
+  ): Promise<FileNode[]> {
+    if (!parentPath) {
+      return this.fetchRootTreeOnly(vault, false, page);
+    }
+    return this.fetchDirectoryChildren(vault, parentPath, page);
   }
 
   /**

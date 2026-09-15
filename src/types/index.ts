@@ -17,12 +17,14 @@ export interface VaultConfig {
 export interface FileNode {
   path: string;
   name: string;
-  type: 'blob' | 'tree';
+  type: 'blob' | 'tree' | 'load_more';
   sha: string;
   size?: number;
   children?: FileNode[];
   isLoaded?: boolean;
   isLoading?: boolean;
+  nextPage?: number;
+  parentPath?: string;
 }
 
 export interface FileCacheEntry {

@@ -253,6 +253,58 @@ export const App: React.FC = () => {
     [showToast]
   );
 
+  // Handle "Load More" pagination for huge directories or root
+  const handleLoadMore = useCallback(
+    async (node: FileNode) => {
+      const vault = activeVaultRef.current;
+      if (!vault || !node.nextPage) return;
+
+      try {
+        const parentPath = node.parentPath || '';
+        const newItems = await GitService.fetchMoreItems(vault, parentPath, node.nextPage);
+
+        // Update tree: replace the load_more node with new items
+        const updateTree = (nodes: FileNode[]): FileNode[] => {
+          if (!parentPath) {
+            // Root level
+            const filtered = nodes.filter((n) => n.path !== node.path);
+            return [...filtered, ...newItems];
+          }
+
+          return nodes.map((n) => {
+            if (n.path === parentPath) {
+              const currentChildren = n.children ? n.children.filter((c) => c.path !== node.path) : [];
+              return {
+                ...n,
+                children: [...currentChildren, ...newItems],
+              };
+            }
+            if (n.children && n.children.length > 0) {
+              return {
+                ...n,
+                children: updateTree(n.children),
+              };
+            }
+            return n;
+          });
+        };
+
+        setFileTree((prevTree) => updateTree(prevTree));
+
+        // Update sha map with newly loaded markdown files
+        for (const item of newItems) {
+          if (item.type === 'blob' && item.path.endsWith('.md') && item.sha) {
+            fileShaMapRef.current.set(item.path, item.sha);
+          }
+        }
+      } catch (e: any) {
+        console.error('Failed to load more items:', e);
+        showToast(`追加の読み込みに失敗しました: ${e.message}`, 'error');
+      }
+    },
+    [showToast]
+  );
+
   // Fetch File Tree for active vault
   const loadFileTree = useCallback(
     async (vault: VaultConfig, force: boolean = false) => {
@@ -750,6 +802,7 @@ export const App: React.FC = () => {
                 activeFilePath={activeFilePath}
                 onSelectFile={safeNavigateFile}
                 onExpandFolder={handleExpandFolder}
+                onLoadMore={handleLoadMore}
               />
             </div>
             <div className="p-2.5 border-t border-obsidian-border bg-zinc-900/40 text-[11px] text-zinc-500 truncate flex items-center justify-between">
@@ -869,6 +922,7 @@ export const App: React.FC = () => {
         activeFilePath={activeFilePath}
         onSelectFile={safeNavigateFile}
         onExpandFolder={handleExpandFolder}
+        onLoadMore={handleLoadMore}
         activeVault={activeVault}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />

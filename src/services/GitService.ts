@@ -54,6 +54,20 @@ export class GitService {
   }
 
   /**
+   * Fetch more items for a directory or root (load more pagination)
+   */
+  static async fetchMoreItems(
+    vault: VaultConfig,
+    parentPath: string,
+    page: number
+  ): Promise<FileNode[]> {
+    if (this.isGitLab(vault)) {
+      return GitLabService.fetchMoreItems(vault, parentPath, page);
+    }
+    return GitHubService.fetchMoreItems(vault, parentPath, page);
+  }
+
+  /**
    * Fetch file content with SWR cache
    */
   static async fetchFileContent(

@@ -8,6 +8,7 @@ import {
   Search,
   X,
   Loader2,
+  PlusCircle,
 } from 'lucide-react';
 import { FileNode } from '../../types';
 
@@ -16,6 +17,7 @@ interface FileTreeContentProps {
   activeFilePath: string;
   onSelectFile: (path: string) => void;
   onExpandFolder?: (node: FileNode) => Promise<void>;
+  onLoadMore?: (node: FileNode) => Promise<void>;
   className?: string;
 }
 
@@ -24,6 +26,7 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
   activeFilePath,
   onSelectFile,
   onExpandFolder,
+  onLoadMore,
   className = '',
 }) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['']));
@@ -129,6 +132,41 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
               </div>
             )}
           </div>
+        );
+      }
+
+      // Load more virtual node (pagination button)
+      if (node.type === 'load_more') {
+        const isThisLoading = loadingFolders.has(node.path) || !!node.isLoading;
+        return (
+          <button
+            key={node.path}
+            type="button"
+            disabled={isThisLoading}
+            onClick={async () => {
+              if (onLoadMore && !isThisLoading) {
+                setLoadingFolders((prev) => new Set(prev).add(node.path));
+                try {
+                  await onLoadMore(node);
+                } finally {
+                  setLoadingFolders((prev) => {
+                    const next = new Set(prev);
+                    next.delete(node.path);
+                    return next;
+                  });
+                }
+              }
+            }}
+            style={{ paddingLeft: `${depth * 14 + 14}px` }}
+            className="w-full flex items-center gap-2 py-2 px-2.5 text-xs text-purple-400 hover:text-purple-200 hover:bg-purple-950/40 active:bg-purple-900/50 rounded-lg transition-colors text-left min-h-[36px] font-medium"
+          >
+            {isThisLoading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
+            ) : (
+              <PlusCircle className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+            )}
+            <span>{node.name || 'さらに読み込む...'}</span>
+          </button>
         );
       }
 
