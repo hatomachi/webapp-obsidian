@@ -2,6 +2,8 @@ import { VaultConfig, FileNode, FileCacheEntry, CommitHistoryItem, CommitFileDif
 import { utf8ToBase64, base64ToUtf8 } from '../utils/encoding';
 
 export class GitLabService {
+  private static numericIdCache = new Map<string, string>();
+
   private static getCacheKey(vault: VaultConfig): string {
     const p = vault.provider || 'gitlab';
     return `webapp_obsidian_file_cache_${p}_${vault.owner}_${vault.repo}`;
@@ -52,6 +54,56 @@ export class GitLabService {
     // Join owner and repo
     const fullPath = `${owner}/${repo}`.replace(/^\/+|\/+$/g, '');
     return encodeURIComponent(fullPath);
+  }
+
+  /**
+   * Resolve numeric project ID to avoid %2F reverse proxy decoding issues in URLs
+   */
+  public static async resolveProjectId(vault: VaultConfig): Promise<string> {
+    const trimmedRepo = (vault.repo || '').trim();
+    // If repo is already a numeric ID, use it directly
+    if (/^\d+$/.test(trimmedRepo)) {
+      return trimmedRepo;
+    }
+
+    const cacheKey = `gitlab_numeric_id_${vault.baseUrl || 'gitlab'}_${vault.owner}_${vault.repo}`;
+    if (this.numericIdCache.has(cacheKey)) {
+      return this.numericIdCache.get(cacheKey)!;
+    }
+
+    try {
+      const saved = localStorage.getItem(cacheKey);
+      if (saved && /^\d+$/.test(saved)) {
+        this.numericIdCache.set(cacheKey, saved);
+        return saved;
+      }
+    } catch {
+      // ignore
+    }
+
+    // Query project info to obtain numeric ID
+    try {
+      const rawPath = this.getProjectId(vault);
+      const res = await this.apiFetch(vault, `/projects/${rawPath}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.id) {
+          const idStr = String(data.id);
+          this.numericIdCache.set(cacheKey, idStr);
+          try {
+            localStorage.setItem(cacheKey, idStr);
+          } catch {
+            // ignore
+          }
+          return idStr;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to resolve GitLab numeric project ID:', e);
+    }
+
+    // Fallback to raw encoded path if resolution fails
+    return this.getProjectId(vault);
   }
 
   /**
@@ -113,9 +165,21 @@ export class GitLabService {
       const project = await projectRes.json();
       const visibility = project.visibility ? project.visibility : 'Internal';
 
+      // Cache the numeric project ID immediately
+      if (project && project.id) {
+        const cacheKey = `gitlab_numeric_id_${vault.baseUrl || 'gitlab'}_${vault.owner}_${vault.repo}`;
+        const idStr = String(project.id);
+        this.numericIdCache.set(cacheKey, idStr);
+        try {
+          localStorage.setItem(cacheKey, idStr);
+        } catch {
+          // ignore
+        }
+      }
+
       return {
         success: true,
-        message: `接続成功: ${project.path_with_namespace || project.name} (${visibility})`,
+        message: `接続成功: ${project.path_with_namespace || project.name} (${visibility}) [ID: ${project.id}]`,
         username,
       };
     } catch (e: any) {
@@ -139,7 +203,7 @@ export class GitLabService {
    * Fetch file tree recursively using GitLab Repository Tree API
    */
   static async fetchFileTree(vault: VaultConfig, force: boolean = false): Promise<FileNode[]> {
-    const projectId = this.getProjectId(vault);
+    const projectId = await this.resolveProjectId(vault);
     const branch = encodeURIComponent(vault.branch || 'main');
 
     let allItems: Array<{ id: string; name: string; type: string; path: string; mode: string }> = [];
@@ -253,7 +317,7 @@ export class GitLabService {
   }
 
   /**
-   * Fetch file content with SWR cache
+   * Fetch file content with SWR cache and blob raw fallback
    */
   static async fetchFileContent(
     vault: VaultConfig,
@@ -275,10 +339,11 @@ export class GitLabService {
       };
     }
 
-    const projectId = this.getProjectId(vault);
+    const projectId = await this.resolveProjectId(vault);
     const branch = encodeURIComponent(vault.branch || 'main');
     const encodedFilePath = encodeURIComponent(filePath);
 
+    // 1. Try standard repository files API
     const endpoint = `/projects/${projectId}/repository/files/${encodedFilePath}?ref=${branch}`;
     const res = await this.apiFetch(vault, endpoint, {
       headers: force
@@ -286,45 +351,72 @@ export class GitLabService {
         : undefined,
     });
 
-    if (!res.ok) {
-      let errDetail = `${res.status} ${res.statusText}`;
-      try {
-        const errJson = await res.json();
-        if (errJson.message) errDetail += ` - ${errJson.message}`;
-      } catch {
-        // ignore
+    if (res.ok) {
+      const data = await res.json();
+      let utf8Content = '';
+
+      if (data.encoding === 'base64' && data.content) {
+        utf8Content = base64ToUtf8(data.content);
+      } else if (typeof data.content === 'string') {
+        utf8Content = data.content;
       }
-      throw new Error(`GitLabファイルの取得に失敗しました: ${errDetail}`);
+
+      const fileShaResult = data.blob_id || data.last_commit_id || data.commit_id || '';
+
+      // Save to cache
+      cache[filePath] = {
+        sha: fileShaResult,
+        content: utf8Content,
+        updatedAt: Date.now(),
+      };
+      this.saveLocalCache(vault, cache);
+
+      return {
+        content: utf8Content,
+        sha: fileShaResult,
+        fromCache: false,
+      };
     }
 
-    const data = await res.json();
-    let utf8Content = '';
+    // 2. Fallback: If 404 (commonly triggered when reverse proxies decode %2F in filePath) and we have fileSha from tree,
+    // fetch raw blob directly via /repository/blobs/:sha/raw (pure hash, no %2F or slashes in URL!)
+    if (res.status === 404 && fileSha) {
+      const blobEndpoint = `/projects/${projectId}/repository/blobs/${encodeURIComponent(fileSha)}/raw`;
+      const blobRes = await this.apiFetch(vault, blobEndpoint, {
+        headers: force
+          ? { 'Cache-Control': 'no-cache, no-store, must-revalidate', Pragma: 'no-cache' }
+          : undefined,
+      });
 
-    if (data.encoding === 'base64' && data.content) {
-      utf8Content = base64ToUtf8(data.content);
-    } else if (typeof data.content === 'string') {
-      utf8Content = data.content;
+      if (blobRes.ok) {
+        const rawContent = await blobRes.text();
+        cache[filePath] = {
+          sha: fileSha,
+          content: rawContent,
+          updatedAt: Date.now(),
+        };
+        this.saveLocalCache(vault, cache);
+
+        return {
+          content: rawContent,
+          sha: fileSha,
+          fromCache: false,
+        };
+      }
     }
 
-    const fileShaResult = data.blob_id || data.last_commit_id || data.commit_id || '';
-
-    // Save to cache
-    cache[filePath] = {
-      sha: fileShaResult,
-      content: utf8Content,
-      updatedAt: Date.now(),
-    };
-    this.saveLocalCache(vault, cache);
-
-    return {
-      content: utf8Content,
-      sha: fileShaResult,
-      fromCache: false,
-    };
+    let errDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson.message) errDetail += ` - ${errJson.message}`;
+    } catch {
+      // ignore
+    }
+    throw new Error(`GitLabファイルの取得に失敗しました: ${errDetail}`);
   }
 
   /**
-   * Save whole file content (create or update)
+   * Save whole file content (create or update) with Commits API fallback
    */
   static async saveFile(
     vault: VaultConfig,
@@ -333,7 +425,7 @@ export class GitLabService {
     _currentSha?: string,
     commitMessage?: string
   ): Promise<{ newSha: string }> {
-    const projectId = this.getProjectId(vault);
+    const projectId = await this.resolveProjectId(vault);
     const encodedFilePath = encodeURIComponent(filePath);
     const base64Content = utf8ToBase64(newContent);
     const branch = vault.branch || 'main';
@@ -354,15 +446,60 @@ export class GitLabService {
       body: JSON.stringify(payload),
     });
 
-    // If 404 (file does not exist yet), try creating file with POST
+    // If 404: file might not exist yet, OR reverse proxy decoded %2F in URL path.
+    // Try GitLab Commits API (which places file_path in request body JSON, avoiding URL %2F issues completely)
     if (res.status === 404) {
-      res = await this.apiFetch(vault, `/projects/${projectId}/repository/files/${encodedFilePath}`, {
+      // First try update action via Commits API
+      const updateCommitPayload = {
+        branch,
+        commit_message: commitMessage || `docs: update ${filePath} via Obsidian Web`,
+        actions: [
+          {
+            action: 'update',
+            file_path: filePath,
+            content: base64Content,
+            encoding: 'base64',
+          },
+        ],
+      };
+
+      let commitRes = await this.apiFetch(vault, `/projects/${projectId}/repository/commits`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(updateCommitPayload),
       });
+
+      if (commitRes.ok) {
+        res = commitRes;
+      } else {
+        // If update failed, try create action via Commits API
+        const createCommitPayload = {
+          branch,
+          commit_message: commitMessage || `docs: create ${filePath} via Obsidian Web`,
+          actions: [
+            {
+              action: 'create',
+              file_path: filePath,
+              content: base64Content,
+              encoding: 'base64',
+            },
+          ],
+        };
+
+        const createRes = await this.apiFetch(vault, `/projects/${projectId}/repository/commits`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(createCommitPayload),
+        });
+
+        if (createRes.ok) {
+          res = createRes;
+        }
+      }
     }
 
     if (!res.ok) {
@@ -447,7 +584,7 @@ export class GitLabService {
     filePath: string,
     perPage: number = 30
   ): Promise<CommitHistoryItem[]> {
-    const projectId = this.getProjectId(vault);
+    const projectId = await this.resolveProjectId(vault);
     const branch = encodeURIComponent(vault.branch || 'main');
     const encodedFilePath = encodeURIComponent(filePath);
 
@@ -501,7 +638,7 @@ export class GitLabService {
       return this.diffCache.get(cacheKey)!;
     }
 
-    const projectId = this.getProjectId(vault);
+    const projectId = await this.resolveProjectId(vault);
     const endpoint = `/projects/${projectId}/repository/commits/${encodeURIComponent(commitSha)}/diff`;
     const res = await this.apiFetch(vault, endpoint);
 
