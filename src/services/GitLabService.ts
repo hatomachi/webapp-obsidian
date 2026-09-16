@@ -888,7 +888,7 @@ export class GitLabService {
   }
 
   /**
-   * Fetch commit history for a specific file
+   * Fetch commit history for a specific file with smart branch & path fallback
    */
   static async fetchFileCommits(
     vault: VaultConfig,
@@ -897,17 +897,81 @@ export class GitLabService {
   ): Promise<CommitHistoryItem[]> {
     const meta = await this.getProjectMetadata(vault);
     const projectId = meta.id;
-    const branch = encodeURIComponent(vault.branch?.trim() || meta.defaultBranch || 'master');
-    const encodedFilePath = encodeURIComponent(filePath);
+    const cleanPath = filePath.replace(/^\/+/, '').trim();
 
-    const endpoint = `/projects/${projectId}/repository/commits?path=${encodedFilePath}&ref_name=${branch}&per_page=${perPage}`;
-    const res = await this.apiFetch(vault, endpoint);
+    // Candidate branches to try:
+    // 1. Configured vault.branch (user setting)
+    // 2. Project defaultBranch from metadata (GitLab default)
+    // 3. undefined (omit ref_name param completely -> GitLab server resolves to repository default branch)
+    // 4. Fallbacks: 'master', 'main'
+    const candidateBranches: (string | undefined)[] = [];
+    const configuredBranch = vault.branch?.trim();
+    if (configuredBranch) candidateBranches.push(configuredBranch);
+    if (meta.defaultBranch && !candidateBranches.includes(meta.defaultBranch)) {
+      candidateBranches.push(meta.defaultBranch);
+    }
+    // undefined represents omitting ref_name parameter
+    candidateBranches.push(undefined);
+    if (!candidateBranches.includes('master')) candidateBranches.push('master');
+    if (!candidateBranches.includes('main')) candidateBranches.push('main');
 
-    if (!res.ok) {
-      throw new Error(`GitLabコミット履歴の取得に失敗しました: ${res.statusText}`);
+    // Path formats to try:
+    // A. encodeURIComponent(cleanPath) -> slashes become %2F
+    // B. cleanPath (raw slashes) -> some proxies or GitLab setups require raw slashes in query params
+    const encodedA = encodeURIComponent(cleanPath);
+    const encodedB = cleanPath;
+    const pathFormats = encodedA === encodedB ? [encodedA] : [encodedA, encodedB];
+
+    let res: Response | null = null;
+    let successfulBranch: string | undefined = undefined;
+    let successfulPath: string | undefined = undefined;
+
+    branchLoop: for (const branch of candidateBranches) {
+      for (const pathParam of pathFormats) {
+        const refQuery = branch ? `&ref_name=${encodeURIComponent(branch)}` : '';
+        const endpoint = `/projects/${projectId}/repository/commits?path=${pathParam}${refQuery}&per_page=${perPage}`;
+
+        try {
+          const tryRes = await this.apiFetch(vault, endpoint);
+          if (tryRes.ok) {
+            res = tryRes;
+            successfulBranch = branch;
+            successfulPath = pathParam;
+            break branchLoop;
+          } else if (tryRes.status === 404) {
+            console.debug(`[GitLabService] fetchFileCommits 404 with path="${pathParam}", ref_name="${branch}". Trying fallback...`);
+          } else {
+            // Non-404 error (e.g. 401 Unauthorized, 403 Forbidden, 500 Server Error)
+            res = tryRes;
+            break branchLoop;
+          }
+        } catch (fetchErr) {
+          console.warn('[GitLabService] commit fetch attempt error:', fetchErr);
+        }
+      }
+    }
+
+    if (successfulBranch !== undefined || successfulPath !== undefined) {
+      console.info(`[GitLabService] Commits resolved successfully: branch="${successfulBranch ?? '(default)'}", path="${successfulPath}"`);
+    }
+
+    if (!res || !res.ok) {
+      // If the final status was 404 across all candidates, the file might not have any commits
+      // on the checked branches, or GitLab returns 404 for empty results on that path.
+      // Return an empty list gracefully so the UI displays "コミット履歴が見つかりませんでした"
+      // rather than throwing a blocking error.
+      if (res && res.status === 404) {
+        console.warn(`[GitLabService] No commits found (404) for "${cleanPath}" across all candidate branches. Returning empty list.`);
+        return [];
+      }
+      const statusDetail = res ? `${res.status} ${res.statusText}` : '通信エラー';
+      throw new Error(`GitLabコミット履歴の取得に失敗しました: ${statusDetail}`);
     }
 
     const data: any[] = await res.json();
+    if (!Array.isArray(data)) {
+      return [];
+    }
 
     return data.map((item) => {
       const fullMessage = item.message || '';
@@ -945,7 +1009,8 @@ export class GitLabService {
     commitSha: string,
     filePath: string
   ): Promise<CommitFileDiff | null> {
-    const cacheKey = `${vault.owner}/${vault.repo}/${commitSha}/${filePath}`;
+    const cleanPath = filePath.replace(/^\/+/, '').trim();
+    const cacheKey = `${vault.owner}/${vault.repo}/${commitSha}/${cleanPath}`;
     if (this.diffCache.has(cacheKey)) {
       return this.diffCache.get(cacheKey)!;
     }
@@ -956,6 +1021,7 @@ export class GitLabService {
     const res = await this.apiFetch(vault, endpoint);
 
     if (!res.ok) {
+      console.warn(`[GitLabService] commit diff fetch failed (${res.status} ${res.statusText}) for sha=${commitSha}`);
       return null;
     }
 
@@ -964,9 +1030,16 @@ export class GitLabService {
       return null;
     }
 
-    const fileDiff = diffList.find(
-      (d) => d.new_path === filePath || d.old_path === filePath
-    );
+    const fileDiff = diffList.find((d) => {
+      const newP = (d.new_path || '').replace(/^\/+/, '');
+      const oldP = (d.old_path || '').replace(/^\/+/, '');
+      return (
+        newP === cleanPath ||
+        oldP === cleanPath ||
+        newP === filePath ||
+        oldP === filePath
+      );
+    });
 
     if (!fileDiff) {
       return null;
@@ -985,7 +1058,7 @@ export class GitLabService {
 
     const diff: CommitFileDiff = {
       sha: commitSha,
-      filename: fileDiff.new_path || filePath,
+      filename: fileDiff.new_path || cleanPath,
       status,
       additions,
       deletions,
