@@ -270,9 +270,9 @@ export const App: React.FC = () => {
 
         setFileTree((prevTree) => updateTree(prevTree));
 
-        // Update sha map with newly loaded markdown files
+        // Update sha map with newly loaded files
         for (const child of children) {
-          if (child.type === 'blob' && child.path.endsWith('.md') && child.sha) {
+          if (child.type === 'blob' && child.sha) {
             fileShaMapRef.current.set(child.path, child.sha);
           }
         }
@@ -322,9 +322,9 @@ export const App: React.FC = () => {
 
         setFileTree((prevTree) => updateTree(prevTree));
 
-        // Update sha map with newly loaded markdown files
+        // Update sha map with newly loaded files
         for (const item of newItems) {
-          if (item.type === 'blob' && item.path.endsWith('.md') && item.sha) {
+          if (item.type === 'blob' && item.sha) {
             fileShaMapRef.current.set(item.path, item.sha);
           }
         }
@@ -350,7 +350,7 @@ export const App: React.FC = () => {
         const shaMap = new Map<string, string>();
         const traverse = (nodes: FileNode[]) => {
           for (const node of nodes) {
-            if (node.type === 'blob' && node.path.endsWith('.md')) {
+            if (node.type === 'blob') {
               paths.push(node.path);
               if (node.sha) shaMap.set(node.path, node.sha);
             }

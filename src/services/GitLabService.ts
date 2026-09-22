@@ -387,9 +387,6 @@ export class GitLabService {
       }
 
       const isTree = item.type === 'tree';
-      if (!isTree && !item.path.endsWith('.md')) {
-        continue;
-      }
 
       const fileName = parts[parts.length - 1];
 
@@ -467,9 +464,6 @@ export class GitLabService {
         }
 
         const isTree = item.type === 'tree';
-        if (!isTree && !itemName.toLowerCase().endsWith('.md')) {
-          continue;
-        }
 
         nodes.push({
           path: item.path,
@@ -553,9 +547,6 @@ export class GitLabService {
         }
 
         const isTree = item.type === 'tree';
-        if (!isTree && !itemName.toLowerCase().endsWith('.md')) {
-          continue;
-        }
 
         children.push({
           path: item.path,
