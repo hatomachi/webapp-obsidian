@@ -105,7 +105,7 @@ export const QuickSwitcherModal: React.FC<QuickSwitcherModalProps> = ({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-zinc-200 group-hover:text-purple-300 truncate">
-                    {item.name.replace(/\.md$/, '')}
+                    {item.name.toLowerCase().endsWith('.md') ? item.name.replace(/\.md$/, '') : item.name}
                   </div>
                   {item.dir && (
                     <div className="text-[11px] text-zinc-500 truncate">{item.dir}</div>

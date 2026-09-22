@@ -1,6 +1,12 @@
 import { Octokit } from '@octokit/rest';
-import { VaultConfig, FileNode, FileCacheEntry, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
-import { utf8ToBase64, base64ToUtf8 } from '../utils/encoding';
+import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
+import {
+  utf8ToBase64,
+  base64ToBytes,
+  decodeBytes,
+  isBinaryExtension,
+  isBinaryData,
+} from '../utils/encoding';
 
 export class GitHubService {
   private static octokitCache = new Map<string, Octokit>();
@@ -152,10 +158,6 @@ export class GitHubService {
       }
 
       const isTree = item.type === 'tree';
-      // Only keep markdown or folders
-      if (!isTree && !item.path.endsWith('.md')) {
-        continue;
-      }
 
       const fileName = parts[parts.length - 1];
 
@@ -225,9 +227,6 @@ export class GitHubService {
       }
 
       const isTree = item.type === 'tree';
-      if (!isTree && !item.path.toLowerCase().endsWith('.md')) {
-        continue;
-      }
 
       nodes.push({
         path: item.path,
@@ -273,9 +272,6 @@ export class GitHubService {
       }
 
       const isTree = item.type === 'tree';
-      if (!isTree && !item.path.toLowerCase().endsWith('.md')) {
-        continue;
-      }
 
       children.push({
         path: fullPath,
@@ -329,7 +325,7 @@ export class GitHubService {
       fileSha?: string;
       force?: boolean;
     }
-  ): Promise<{ content: string; sha: string; fromCache: boolean }> {
+  ): Promise<FileFetchResult> {
     const { fileSha, force = false } = options || {};
     const cache = this.getLocalCache(vault);
     const cachedEntry = cache[filePath];
@@ -343,6 +339,8 @@ export class GitHubService {
         content: cachedEntry.content,
         sha: cachedEntry.sha,
         fromCache: true,
+        rawBase64: cachedEntry.rawBase64,
+        isBinary: cachedEntry.isBinary,
       };
     }
 
@@ -364,24 +362,53 @@ export class GitHubService {
       headers: requestHeaders,
     });
 
-    if (Array.isArray(data) || !('content' in data)) {
-      throw new Error(`Path ${filePath} is not a file`);
+    if (Array.isArray(data)) {
+      throw new Error(`Path ${filePath} is a directory, not a file`);
     }
 
-    const utf8Content = base64ToUtf8(data.content);
-    
-    // Save to cache
+    let rawBase64 = '';
+    let fileSize = 0;
+    let sha = '';
+
+    if ('content' in data && data.content) {
+      rawBase64 = data.content.replace(/\s/g, '');
+      fileSize = data.size || 0;
+      sha = data.sha;
+    } else if ('sha' in data) {
+      // For files > 1MB, getContent returns metadata without content; fetch via git.getBlob
+      sha = data.sha;
+      const blobRes = await octokit.git.getBlob({
+        owner: vault.owner,
+        repo: vault.repo,
+        file_sha: data.sha,
+      });
+      rawBase64 = blobRes.data.content.replace(/\s/g, '');
+      fileSize = blobRes.data.size || 0;
+    } else {
+      throw new Error(`Path ${filePath} is not a valid file`);
+    }
+
+    const bytes = base64ToBytes(rawBase64);
+    const isBin = isBinaryExtension(filePath) || isBinaryData(bytes);
+    const textContent = isBin ? '' : decodeBytes(bytes, 'utf-8');
+
+    // Save to cache (avoid storing massive binary rawBase64 in localStorage to save quota)
     cache[filePath] = {
-      sha: data.sha,
-      content: utf8Content,
+      sha,
+      content: textContent,
       updatedAt: Date.now(),
+      rawBase64: rawBase64.length < 500000 ? rawBase64 : undefined,
+      isBinary: isBin,
     };
     this.saveLocalCache(vault, cache);
 
     return {
-      content: utf8Content,
-      sha: data.sha,
+      content: textContent,
+      sha,
       fromCache: false,
+      rawBase64,
+      isBinary: isBin,
+      size: fileSize || bytes.length,
     };
   }
 

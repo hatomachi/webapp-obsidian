@@ -27,10 +27,23 @@ export interface FileNode {
   parentPath?: string;
 }
 
+export type TextEncoding = 'utf-8' | 'shift_jis' | 'euc-jp' | 'iso-2022-jp';
+
 export interface FileCacheEntry {
   sha: string;
   content: string;
   updatedAt: number;
+  rawBase64?: string;
+  isBinary?: boolean;
+}
+
+export interface FileFetchResult {
+  content: string;
+  sha: string;
+  fromCache: boolean;
+  rawBase64?: string;
+  isBinary?: boolean;
+  size?: number;
 }
 
 export interface TOCItem {

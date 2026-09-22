@@ -3,6 +3,10 @@ import {
   Folder,
   FolderOpen,
   FileText,
+  FileCode,
+  Image as ImageIcon,
+  FileArchive,
+  File,
   ChevronRight,
   ChevronDown,
   Search,
@@ -170,8 +174,27 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
         );
       }
 
-      // Markdown file
-      const displayName = node.name.replace(/\.md$/, '');
+      // File name display (.md hides extension, others keep extension)
+      const isMd = node.name.toLowerCase().endsWith('.md');
+      const displayName = isMd ? node.name.replace(/\.md$/, '') : node.name;
+      const ext = node.name.includes('.') ? node.name.split('.').pop()?.toLowerCase() || '' : '';
+      const iconColor = isSelected ? 'text-purple-400' : 'text-zinc-500';
+
+      const renderFileIcon = () => {
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) {
+          return <ImageIcon className={`w-4 h-4 shrink-0 ${iconColor}`} />;
+        }
+        if (['yaml', 'yml', 'json', 'js', 'ts', 'jsx', 'tsx', 'py', 'sh', 'bash', 'sql', 'css', 'html', 'toml', 'ini', 'env'].includes(ext)) {
+          return <FileCode className={`w-4 h-4 shrink-0 ${iconColor}`} />;
+        }
+        if (['zip', 'tar', 'gz', 'bz2', '7z', 'rar'].includes(ext)) {
+          return <FileArchive className={`w-4 h-4 shrink-0 ${iconColor}`} />;
+        }
+        if (isMd || ext === 'txt') {
+          return <FileText className={`w-4 h-4 shrink-0 ${iconColor}`} />;
+        }
+        return <File className={`w-4 h-4 shrink-0 ${iconColor}`} />;
+      };
 
       return (
         <button
@@ -185,11 +208,7 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
               : 'text-zinc-300 hover:text-white hover:bg-obsidian-hover active:bg-zinc-800'
           }`}
         >
-          <FileText
-            className={`w-4 h-4 shrink-0 ${
-              isSelected ? 'text-purple-400' : 'text-zinc-500'
-            }`}
-          />
+          {renderFileIcon()}
           <span className="truncate">{displayName}</span>
         </button>
       );

@@ -7,11 +7,13 @@ import { QuickSwitcherModal } from './components/Modals/QuickSwitcherModal';
 import { EditModal } from './components/Modals/EditModal';
 import { SettingsModal } from './components/Modals/SettingsModal';
 import { MarkdownViewer } from './components/MarkdownViewer/MarkdownViewer';
+import { PlainTextViewer } from './components/TextViewer/PlainTextViewer';
+import { BinaryViewer } from './components/BinaryViewer/BinaryViewer';
 import { VaultManager } from './services/VaultManager';
 import { GitService } from './services/GitService';
-import { VaultConfig, FileNode, UIPreferences } from './types';
+import { VaultConfig, FileNode, UIPreferences, TextEncoding } from './types';
 import { extractTOC } from './utils/markdownUtils';
-import { extractTitle } from './utils/encoding';
+import { extractTitle, base64ToBytes, decodeBytes } from './utils/encoding';
 import { FileTreeContent } from './components/Drawers/FileTreeContent';
 import { BreadcrumbNav } from './components/Navigation/BreadcrumbNav';
 import { RecentNotesBar } from './components/Navigation/RecentNotesBar';
@@ -38,6 +40,10 @@ export const App: React.FC = () => {
   const [content, setContent] = useState<string>('');
   const [initialContent, setInitialContent] = useState<string>('');
   const [currentSha, setCurrentSha] = useState<string>('');
+  const [rawBase64, setRawBase64] = useState<string>('');
+  const [fileIsBinary, setFileIsBinary] = useState<boolean>(false);
+  const [fileSize, setFileSize] = useState<number | undefined>(undefined);
+  const [currentEncoding, setCurrentEncoding] = useState<TextEncoding>('utf-8');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,12 +118,12 @@ export const App: React.FC = () => {
     return vaults.find((v) => v.id === activeVaultId) || null;
   }, [vaults, activeVaultId]);
 
-  // Recursively extract all markdown file paths from fileTree
+  // Recursively extract all file paths from fileTree (md, yaml, txt, code, etc.)
   const allFilePaths = useMemo(() => {
     const paths: string[] = [];
     const traverse = (nodes: FileNode[]) => {
       for (const node of nodes) {
-        if (node.type === 'blob' && node.path.endsWith('.md')) {
+        if (node.type === 'blob') {
           paths.push(node.path);
         }
         if (node.children) {
@@ -159,6 +165,9 @@ export const App: React.FC = () => {
         setContent(cached.content);
         setInitialContent(cached.content);
         setCurrentSha(cached.sha);
+        setRawBase64(cached.rawBase64 || '');
+        setFileIsBinary(!!cached.isBinary);
+        setCurrentEncoding('utf-8');
       } else {
         setIsLoading(true);
       }
@@ -189,6 +198,10 @@ export const App: React.FC = () => {
         setContent(res.content);
         setInitialContent(res.content);
         setCurrentSha(res.sha);
+        setRawBase64(res.rawBase64 || '');
+        setFileIsBinary(!!res.isBinary);
+        setFileSize(res.size);
+        setCurrentEncoding('utf-8');
 
         // キャッシュから更新された場合、控えめにトースト通知
         if (cached && cached.sha !== res.sha) {
@@ -206,6 +219,24 @@ export const App: React.FC = () => {
       }
     },
     []
+  );
+
+  // Handle character encoding switch (re-decode from rawBase64 in memory without re-fetching)
+  const handleChangeEncoding = useCallback(
+    (newEncoding: TextEncoding) => {
+      setCurrentEncoding(newEncoding);
+      if (rawBase64) {
+        try {
+          const bytes = base64ToBytes(rawBase64);
+          const decoded = decodeBytes(bytes, newEncoding);
+          setContent(decoded);
+          showToast(`文字コードを ${newEncoding.toUpperCase()} に変更しました`, 'info');
+        } catch (e: any) {
+          showToast(`デコードに失敗しました: ${e.message}`, 'error');
+        }
+      }
+    },
+    [rawBase64]
   );
 
   // Handle on-demand folder expansion (lazy loading for huge repos)
@@ -753,7 +784,13 @@ export const App: React.FC = () => {
         isSidebarOpen={isSidebarOpen}
         onOpenTOC={() => setIsTOCOpen(true)}
         onOpenQuickSwitcher={() => setIsQuickSwitcherOpen(true)}
-        onOpenEditModal={() => setIsEditModalOpen(true)}
+        onOpenEditModal={() => {
+          if (!fileIsBinary) {
+            setIsEditModalOpen(true);
+          } else {
+            showToast('バイナリファイルは編集できません', 'error');
+          }
+        }}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onRefresh={async () => {
           if (activeVault) {
@@ -762,6 +799,9 @@ export const App: React.FC = () => {
           }
         }}
         isRefreshing={isRefreshing}
+        currentEncoding={currentEncoding}
+        onChangeEncoding={handleChangeEncoding}
+        showEncodingSelector={!fileIsBinary && !!activeFilePath}
       />
 
       {/* Navigation Sub-bars (Breadcrumbs & Recent Notes) */}
@@ -843,7 +883,13 @@ export const App: React.FC = () => {
                 Vaultを設定する
               </button>
             </div>
-          ) : (
+          ) : fileIsBinary ? (
+            <BinaryViewer
+              filePath={activeFilePath}
+              rawBase64={rawBase64}
+              size={fileSize}
+            />
+          ) : (activeFilePath.toLowerCase().endsWith('.md') || activeFilePath.toLowerCase().endsWith('.markdown')) ? (
             <>
               <MarkdownViewer
                 content={content}
@@ -862,12 +908,18 @@ export const App: React.FC = () => {
                 />
               )}
             </>
+          ) : (
+            <PlainTextViewer
+              content={content}
+              filePath={activeFilePath}
+              encoding={currentEncoding}
+            />
           )}
         </main>
       </div>
 
       {/* Checklist Action Bar (Sticky above quick append bar when note contains tasks) */}
-      {activeVault && activeFilePath && taskStats.total > 0 && (
+      {!fileIsBinary && activeVault && activeFilePath && taskStats.total > 0 && (
         <div className="fixed bottom-14 sm:bottom-16 left-0 right-0 z-20 pointer-events-none">
           <div className="pointer-events-auto">
             <ChecklistActionBar
@@ -883,8 +935,8 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Quick Append Bar (Sticky at bottom for mobile) */}
-      {activeVault && activeFilePath && (
+      {/* Quick Append Bar (Sticky at bottom for mobile, only for markdown notes) */}
+      {!fileIsBinary && activeVault && activeFilePath && (activeFilePath.toLowerCase().endsWith('.md') || activeFilePath.toLowerCase().endsWith('.markdown')) && (
         <div className="fixed bottom-0 left-0 right-0 z-20 bg-obsidian-sidebar/95 backdrop-blur-md border-t border-obsidian-border p-2 safe-bottom select-none">
           <form
             onSubmit={handleQuickAppend}

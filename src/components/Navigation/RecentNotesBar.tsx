@@ -54,7 +54,8 @@ export const RecentNotesBar: React.FC<RecentNotesBarProps> = ({
       {/* Recent Notes Horizontal Scrollable Pills */}
       <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
         {recentNotes.map((path) => {
-          const fileName = (path.split('/').pop() || '').replace(/\.md$/, '');
+          const rawName = path.split('/').pop() || '';
+          const fileName = path.toLowerCase().endsWith('.md') ? rawName.replace(/\.md$/, '') : rawName;
           const isCurrent = path === activeFilePath;
 
           return (

@@ -48,7 +48,7 @@ export const BreadcrumbNav: React.FC<BreadcrumbNavProps> = ({
       accumulated = accumulated ? `${accumulated}/${part}` : part;
 
       result.push({
-        name: isLast ? part.replace(/\.md$/, '') : part,
+        name: isLast ? (part.toLowerCase().endsWith('.md') ? part.replace(/\.md$/, '') : part) : part,
         fullDirPath: isLast ? (parts.slice(0, -1).join('/') || '') : accumulated,
         isFolder: !isLast,
         isFile: isLast,
@@ -78,7 +78,8 @@ export const BreadcrumbNav: React.FC<BreadcrumbNavProps> = ({
         // Root directory
         const slashIdx = path.indexOf('/');
         if (slashIdx === -1) {
-          fileList.push({ path, name: path.replace(/\.md$/, '') });
+          const isMd = path.toLowerCase().endsWith('.md');
+          fileList.push({ path, name: isMd ? path.replace(/\.md$/, '') : path });
         } else {
           const folderName = path.slice(0, slashIdx);
           folderMap.set(folderName, (folderMap.get(folderName) || 0) + 1);
@@ -87,7 +88,8 @@ export const BreadcrumbNav: React.FC<BreadcrumbNavProps> = ({
         const remainder = path.slice(targetPrefix.length);
         const slashIdx = remainder.indexOf('/');
         if (slashIdx === -1) {
-          fileList.push({ path, name: remainder.replace(/\.md$/, '') });
+          const isMd = remainder.toLowerCase().endsWith('.md');
+          fileList.push({ path, name: isMd ? remainder.replace(/\.md$/, '') : remainder });
         } else {
           const folderName = remainder.slice(0, slashIdx);
           folderMap.set(folderName, (folderMap.get(folderName) || 0) + 1);

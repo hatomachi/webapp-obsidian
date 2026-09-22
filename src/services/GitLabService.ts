@@ -1,5 +1,11 @@
-import { VaultConfig, FileNode, FileCacheEntry, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
-import { utf8ToBase64, base64ToUtf8 } from '../utils/encoding';
+import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
+import {
+  utf8ToBase64,
+  base64ToBytes,
+  decodeBytes,
+  isBinaryExtension,
+  isBinaryData,
+} from '../utils/encoding';
 
 export interface GitLabProjectMetadata {
   id: string;
@@ -632,7 +638,7 @@ export class GitLabService {
       fileSha?: string;
       force?: boolean;
     }
-  ): Promise<{ content: string; sha: string; fromCache: boolean }> {
+  ): Promise<FileFetchResult> {
     const { fileSha, force = false } = options || {};
     const cache = this.getLocalCache(vault);
     const cachedEntry = cache[filePath];
@@ -642,6 +648,8 @@ export class GitLabService {
         content: cachedEntry.content,
         sha: cachedEntry.sha,
         fromCache: true,
+        rawBase64: cachedEntry.rawBase64,
+        isBinary: cachedEntry.isBinary,
       };
     }
 
@@ -678,18 +686,33 @@ export class GitLabService {
       });
 
       if (blobRes.ok) {
-        const rawContent = await blobRes.text();
+        const buffer = await blobRes.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binaryStr = '';
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+          binaryStr += String.fromCharCode(bytes[i]);
+        }
+        const rawBase64 = window.btoa(binaryStr);
+        const isBin = isBinaryExtension(filePath) || isBinaryData(bytes);
+        const textContent = isBin ? '' : decodeBytes(bytes, 'utf-8');
+
         cache[filePath] = {
           sha: fileSha,
-          content: rawContent,
+          content: textContent,
           updatedAt: Date.now(),
+          rawBase64: rawBase64.length < 500000 ? rawBase64 : undefined,
+          isBinary: isBin,
         };
         this.saveLocalCache(vault, cache);
 
         return {
-          content: rawContent,
+          content: textContent,
           sha: fileSha,
           fromCache: false,
+          rawBase64,
+          isBinary: isBin,
+          size: bytes.length,
         };
       }
     }
@@ -704,28 +727,42 @@ export class GitLabService {
     }
 
     const data = await res.json();
-    let utf8Content = '';
+    let rawBase64 = '';
+    let bytes: Uint8Array;
 
     if (data.encoding === 'base64' && data.content) {
-      utf8Content = base64ToUtf8(data.content);
+      rawBase64 = data.content.replace(/\s/g, '');
+      bytes = base64ToBytes(rawBase64);
     } else if (typeof data.content === 'string') {
-      utf8Content = data.content;
+      const text = data.content;
+      rawBase64 = utf8ToBase64(text);
+      bytes = base64ToBytes(rawBase64);
+    } else {
+      bytes = new Uint8Array(0);
     }
 
+    const isBin = isBinaryExtension(filePath) || isBinaryData(bytes);
+    const textContent = isBin ? '' : decodeBytes(bytes, 'utf-8');
     const fileShaResult = data.blob_id || data.last_commit_id || data.commit_id || '';
+    const fileSize = data.size || bytes.length;
 
     // Save to cache
     cache[filePath] = {
       sha: fileShaResult,
-      content: utf8Content,
+      content: textContent,
       updatedAt: Date.now(),
+      rawBase64: rawBase64.length < 500000 ? rawBase64 : undefined,
+      isBinary: isBin,
     };
     this.saveLocalCache(vault, cache);
 
     return {
-      content: utf8Content,
+      content: textContent,
       sha: fileShaResult,
       fromCache: false,
+      rawBase64,
+      isBinary: isBin,
+      size: fileSize,
     };
   }
 

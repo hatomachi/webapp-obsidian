@@ -9,8 +9,9 @@ import {
   Check,
   Plus,
   RefreshCw,
+  Languages,
 } from 'lucide-react';
-import { VaultConfig } from '../../types';
+import { VaultConfig, TextEncoding } from '../../types';
 
 interface HeaderProps {
   vaults: VaultConfig[];
@@ -25,7 +26,17 @@ interface HeaderProps {
   onRefresh: () => void;
   isRefreshing?: boolean;
   isSidebarOpen?: boolean;
+  currentEncoding?: TextEncoding;
+  onChangeEncoding?: (encoding: TextEncoding) => void;
+  showEncodingSelector?: boolean;
 }
+
+const ENCODING_OPTIONS: { label: string; value: TextEncoding; short: string }[] = [
+  { label: 'UTF-8', value: 'utf-8', short: 'UTF-8' },
+  { label: 'Shift_JIS (SJIS/CP932)', value: 'shift_jis', short: 'SJIS' },
+  { label: 'EUC-JP', value: 'euc-jp', short: 'EUC' },
+  { label: 'ISO-2022-JP (JIS)', value: 'iso-2022-jp', short: 'JIS' },
+];
 
 export const Header: React.FC<HeaderProps> = ({
   vaults,
@@ -40,15 +51,23 @@ export const Header: React.FC<HeaderProps> = ({
   onRefresh,
   isRefreshing = false,
   isSidebarOpen = false,
+  currentEncoding = 'utf-8',
+  onChangeEncoding,
+  showEncodingSelector = false,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [encodingDropdownOpen, setEncodingDropdownOpen] = useState(false);
+  const encodingDropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
+      }
+      if (encodingDropdownRef.current && !encodingDropdownRef.current.contains(e.target as Node)) {
+        setEncodingDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -139,6 +158,49 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-1">
+        {/* Encoding selector dropdown */}
+        {showEncodingSelector && onChangeEncoding && (
+          <div className="relative" ref={encodingDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setEncodingDropdownOpen(!encodingDropdownOpen)}
+              title={`文字コード: ${currentEncoding.toUpperCase()} (文字化け時に変更)`}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white bg-zinc-800/80 hover:bg-zinc-700/80 border border-zinc-700/60 active:scale-95 transition-all"
+            >
+              <Languages className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <span className="font-mono text-[11px] uppercase">
+                {ENCODING_OPTIONS.find((o) => o.value === currentEncoding)?.short || 'UTF-8'}
+              </span>
+              <ChevronDown className="w-3 h-3 text-zinc-400 shrink-0" />
+            </button>
+
+            {encodingDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-52 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider border-b border-zinc-800">
+                  日本語文字コード変更
+                </div>
+                <div className="py-1">
+                  {ENCODING_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        onChangeEncoding(opt.value);
+                        setEncodingDropdownOpen(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-zinc-800 transition-colors text-zinc-200"
+                    >
+                      <span>{opt.label}</span>
+                      {currentEncoding === opt.value && (
+                        <Check className="w-3.5 h-3.5 text-purple-400 shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {/* Refresh button */}
         <button
           type="button"

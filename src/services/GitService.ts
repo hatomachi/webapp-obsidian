@@ -1,4 +1,4 @@
-import { VaultConfig, FileNode, FileCacheEntry, CommitHistoryItem, CommitFileDiff } from '../types';
+import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff } from '../types';
 import { GitHubService } from './GitHubService';
 import { GitLabService } from './GitLabService';
 
@@ -77,7 +77,7 @@ export class GitService {
       fileSha?: string;
       force?: boolean;
     }
-  ): Promise<{ content: string; sha: string; fromCache: boolean }> {
+  ): Promise<FileFetchResult> {
     if (this.isGitLab(vault)) {
       return GitLabService.fetchFileContent(vault, filePath, options);
     }
