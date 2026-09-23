@@ -54,7 +54,8 @@ webapp-obsidian/
 ├── vite.config.ts                              # Vite 設定 (ポート 3333, パスエイリアス @/*)
 ├── docs/
 │   ├── ARCHITECTURE_AND_CONCEPT.md            # 詳細設計思想・セキュリティ仕様書
-│   └── DEPLOY_TO_CLOUDFLARE_PAGES.md          # Cloudflare Pages デプロイ手順書
+│   ├── DEPLOY_TO_CLOUDFLARE_PAGES.md          # Cloudflare Pages デプロイ手順書
+│   └── BASES_GUIDE.md                         # 【必読】Bases機能・フォーマット完全仕様ガイド（AI・開発者向け）
 ├── public/
 │   ├── manifest.webmanifest                    # PWA マニフェスト設定
 │   └── obsidian.svg                            # アプリアイコン

@@ -23,6 +23,14 @@ Cloudflare Pages × GitHub Private Repository（GitHub API直接通信）の完�
    - **Quick Switcher (ファイル検索)**: 全ファイルを対象にあいまい・インクリメンタル検索。
    - **クイック追記バー**: ノート末尾にワンタップでメモを追記。
    - **フルテキスト編集**: 編集モーダルからノート全体を直接編集・コミット可能。
+5. **📊 Obsidian Bases（表形式ビュー＆直接インライン編集）**:
+   - **単一YAML配列ビュー**: 1つのYAMLファイル内の配列要素を自動で表形式（テーブル）に展開。
+   - **フォルダ内ノート一覧ビュー**: 指定フォルダ内のMarkdownノートのFrontmatterや見出し内容を横断表形式で俯瞰。
+   - **表上での直接編集＆Git自動コミット**: 表のセルをタップして直接値をインライン更新（Booleanトグル、Status候補選択、タグ追加/削除、テキスト入力）。
+   - **編集可能列の縛り設定**: `.base` 定義ファイルで `editable: [status, priority]` のように編集可能列を制限・ロック可能。
+
+📖 **Bases定義・データ作成の完全仕様書（AI・開発者向け）**:  
+👉 [Obsidian Bases 完全仕様ガイド (docs/BASES_GUIDE.md)](docs/BASES_GUIDE.md)
 
 ---
 
