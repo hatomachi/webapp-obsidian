@@ -563,11 +563,24 @@ export const App: React.FC = () => {
   }, [content]);
 
   // Note Navigation History & Recents Hook
-  const { recentNotes, canGoBack, canGoForward, goBack, goForward } = useNoteHistory(
-    activeVaultId,
+  const {
+    recentNotes,
+    recentUpdatedNotes,
+    barMode,
+    isRefreshingUpdated,
+    toggleBarMode,
+    refreshUpdatedNotes,
+    recordUpdatedNote,
+    canGoBack,
+    canGoForward,
+    goBack,
+    goForward,
+  } = useNoteHistory(
+    activeVault,
     activeFilePath,
     safeNavigateFile
   );
+
 
   // Switch vault
   const handleSelectVault = (vaultId: string) => {
@@ -632,6 +645,7 @@ export const App: React.FC = () => {
       );
       setInitialContent(content);
       setCurrentSha(res.newSha);
+      recordUpdatedNote(activeFilePath, 'task_toggle');
       showToast('リポジトリへ反映しました', 'success');
     } catch (e: any) {
       console.error('Task save failed:', e);
@@ -698,6 +712,7 @@ export const App: React.FC = () => {
       );
       setInitialContent(updatedContent);
       setCurrentSha(res.newSha);
+      recordUpdatedNote(activeFilePath, 'manual');
       showToast('追記＆コミット完了', 'success');
     } catch (e: any) {
       console.error('Quick append failed:', e);
@@ -720,6 +735,7 @@ export const App: React.FC = () => {
     setContent(newContent);
     setInitialContent(newContent);
     setCurrentSha(res.newSha);
+    recordUpdatedNote(activeFilePath, 'manual');
     showToast('保存＆コミットが完了しました', 'success');
   };
 
@@ -821,6 +837,11 @@ export const App: React.FC = () => {
           {uiPrefs.enableRecentNotes && (
             <RecentNotesBar
               recentNotes={recentNotes}
+              recentUpdatedNotes={recentUpdatedNotes}
+              barMode={barMode}
+              isRefreshingUpdated={isRefreshingUpdated}
+              onToggleMode={toggleBarMode}
+              onRefreshUpdated={refreshUpdatedNotes}
               activeFilePath={activeFilePath}
               canGoBack={canGoBack}
               canGoForward={canGoForward}

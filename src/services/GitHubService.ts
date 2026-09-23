@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
+import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, CommitType, RecentUpdatedFile } from '../types';
 import {
   utf8ToBase64,
   base64ToBytes,
@@ -661,4 +661,100 @@ export class GitHubService {
     this.diffCache.set(cacheKey, diff);
     return diff;
   }
+
+  /**
+   * Fetch recently updated files from repository commits
+   */
+  static async fetchRecentUpdatedFiles(
+    vault: VaultConfig,
+    limit: number = 8
+  ): Promise<RecentUpdatedFile[]> {
+    try {
+      const octokit = this.getOctokit(vault.token);
+
+      // 1. Fetch recent commits on the branch
+      const { data: commits } = await octokit.repos.listCommits({
+        owner: vault.owner,
+        repo: vault.repo,
+        sha: vault.branch || 'main',
+        per_page: Math.min(limit * 2, 15),
+        headers: {
+          'If-None-Match': '',
+        },
+      });
+
+      if (!commits || commits.length === 0) {
+        return [];
+      }
+
+      // 2. Fetch commit details in parallel to get changed files
+      const commitDetails = await Promise.all(
+        commits.map(async (c) => {
+          try {
+            const { data } = await octokit.repos.getCommit({
+              owner: vault.owner,
+              repo: vault.repo,
+              ref: c.sha,
+            });
+            return data;
+          } catch (e) {
+            console.warn(`[GitHubService] Failed to get commit detail for ${c.sha}`, e);
+            return null;
+          }
+        })
+      );
+
+      // 3. Extract unique files
+      const result: RecentUpdatedFile[] = [];
+      const seenPaths = new Set<string>();
+
+      for (const detail of commitDetails) {
+        if (!detail || !detail.files) continue;
+
+        const fullMessage = detail.commit.message || '';
+        const summary = fullMessage.split('\n')[0] || '';
+        const authorName = detail.commit.author?.name || detail.author?.login || 'Unknown';
+        const authorDate = detail.commit.author?.date || detail.commit.committer?.date || new Date().toISOString();
+        const commitType = this.detectCommitType(fullMessage, authorName);
+
+        for (const file of detail.files) {
+          const filePath = file.filename;
+          if (!filePath) continue;
+
+          // Skip hidden / system files
+          if (filePath.startsWith('.git') || filePath.startsWith('.github/')) continue;
+          // Skip deleted files
+          if (file.status === 'removed') continue;
+          // Skip binary files (images, pdfs, etc.)
+          if (isBinaryExtension(filePath)) continue;
+
+          if (!seenPaths.has(filePath)) {
+            seenPaths.add(filePath);
+            result.push({
+              path: filePath,
+              commitSha: detail.sha,
+              commitMessage: summary,
+              authorName,
+              authorDate,
+              commitType,
+            });
+
+            if (result.length >= limit) {
+              break;
+            }
+          }
+        }
+
+        if (result.length >= limit) {
+          break;
+        }
+      }
+
+      return result;
+    } catch (e) {
+      console.warn('[GitHubService] fetchRecentUpdatedFiles failed', e);
+      return [];
+    }
+  }
 }
+

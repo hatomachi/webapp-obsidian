@@ -90,3 +90,13 @@ export interface CommitFileDiff {
   changes: number;
   patch?: string;
 }
+
+export interface RecentUpdatedFile {
+  path: string;
+  commitSha: string;
+  commitMessage: string;
+  authorName: string;
+  authorDate: string;
+  commitType: CommitType;
+}
+

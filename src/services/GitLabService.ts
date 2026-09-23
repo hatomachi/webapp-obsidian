@@ -1,4 +1,4 @@
-import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, CommitType } from '../types';
+import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, CommitType, RecentUpdatedFile } from '../types';
 import {
   utf8ToBase64,
   base64ToBytes,
@@ -1097,4 +1097,109 @@ export class GitLabService {
     this.diffCache.set(cacheKey, diff);
     return diff;
   }
+
+  /**
+   * Fetch recently updated files from repository commits
+   */
+  static async fetchRecentUpdatedFiles(
+    vault: VaultConfig,
+    limit: number = 8
+  ): Promise<RecentUpdatedFile[]> {
+    try {
+      const meta = await this.getProjectMetadata(vault);
+      const projectId = meta.id;
+
+      // Candidate branches
+      const candidateBranches: (string | undefined)[] = [];
+      const configuredBranch = vault.branch?.trim();
+      if (configuredBranch) candidateBranches.push(configuredBranch);
+      if (meta.defaultBranch && !candidateBranches.includes(meta.defaultBranch)) {
+        candidateBranches.push(meta.defaultBranch);
+      }
+      candidateBranches.push(undefined);
+
+      let commits: any[] = [];
+      for (const branch of candidateBranches) {
+        const refQuery = branch ? `&ref_name=${encodeURIComponent(branch)}` : '';
+        const endpoint = `/projects/${projectId}/repository/commits?per_page=${Math.min(limit * 2, 15)}${refQuery}`;
+        const res = await this.apiFetch(vault, endpoint);
+        if (res.ok) {
+          commits = await res.json();
+          if (Array.isArray(commits) && commits.length > 0) {
+            break;
+          }
+        }
+      }
+
+      if (!commits || commits.length === 0) {
+        return [];
+      }
+
+      // Fetch diffs for each commit in parallel
+      const diffResults = await Promise.all(
+        commits.map(async (c) => {
+          try {
+            const res = await this.apiFetch(vault, `/projects/${projectId}/repository/commits/${c.id}/diff`);
+            if (res.ok) {
+              const diffs = await res.json();
+              return { commit: c, diffs: Array.isArray(diffs) ? diffs : [] };
+            }
+          } catch (e) {
+            console.warn(`[GitLabService] Failed to fetch diff for commit ${c.id}`, e);
+          }
+          return { commit: c, diffs: [] };
+        })
+      );
+
+      // Extract unique files
+      const result: RecentUpdatedFile[] = [];
+      const seenPaths = new Set<string>();
+
+      for (const { commit, diffs } of diffResults) {
+        const fullMessage = commit.title || commit.message || '';
+        const summary = fullMessage.split('\n')[0] || '';
+        const authorName = commit.author_name || 'Unknown';
+        const authorDate = commit.committed_date || commit.created_at || new Date().toISOString();
+        const commitType = this.detectCommitType(fullMessage, authorName);
+
+        for (const diffItem of diffs) {
+          const filePath = (diffItem.new_path || diffItem.old_path || '').replace(/^\/+/, '');
+          if (!filePath) continue;
+
+          // Skip hidden / system files
+          if (filePath.startsWith('.git') || filePath.startsWith('.gitlab/')) continue;
+          // Skip deleted files
+          if (diffItem.deleted_file) continue;
+          // Skip binary files
+          if (isBinaryExtension(filePath)) continue;
+
+          if (!seenPaths.has(filePath)) {
+            seenPaths.add(filePath);
+            result.push({
+              path: filePath,
+              commitSha: commit.id,
+              commitMessage: summary,
+              authorName,
+              authorDate,
+              commitType,
+            });
+
+            if (result.length >= limit) {
+              break;
+            }
+          }
+        }
+
+        if (result.length >= limit) {
+          break;
+        }
+      }
+
+      return result;
+    } catch (e) {
+      console.warn('[GitLabService] fetchRecentUpdatedFiles failed', e);
+      return [];
+    }
+  }
 }
+

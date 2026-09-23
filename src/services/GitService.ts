@@ -1,4 +1,4 @@
-import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff } from '../types';
+import { VaultConfig, FileNode, FileCacheEntry, FileFetchResult, CommitHistoryItem, CommitFileDiff, RecentUpdatedFile } from '../types';
 import { GitHubService } from './GitHubService';
 import { GitLabService } from './GitLabService';
 
@@ -127,4 +127,18 @@ export class GitService {
     }
     return GitHubService.fetchCommitFileDiff(vault, commitSha, filePath);
   }
+
+  /**
+   * Fetch recently updated files from repository commits
+   */
+  static async fetchRecentUpdatedFiles(
+    vault: VaultConfig,
+    limit: number = 8
+  ): Promise<RecentUpdatedFile[]> {
+    if (this.isGitLab(vault)) {
+      return GitLabService.fetchRecentUpdatedFiles(vault, limit);
+    }
+    return GitHubService.fetchRecentUpdatedFiles(vault, limit);
+  }
 }
+
