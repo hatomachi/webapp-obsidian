@@ -13,6 +13,7 @@ import {
   X,
   Loader2,
   PlusCircle,
+  Table,
 } from 'lucide-react';
 import { FileNode } from '../../types';
 
@@ -181,6 +182,9 @@ export const FileTreeContent: React.FC<FileTreeContentProps> = ({
       const iconColor = isSelected ? 'text-purple-400' : 'text-zinc-500';
 
       const renderFileIcon = () => {
+        if (ext === 'base' || ext === 'bases' || node.name.toLowerCase().endsWith('.base.md')) {
+          return <Table className={`w-4 h-4 shrink-0 ${iconColor}`} />;
+        }
         if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) {
           return <ImageIcon className={`w-4 h-4 shrink-0 ${iconColor}`} />;
         }
