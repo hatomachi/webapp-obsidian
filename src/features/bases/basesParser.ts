@@ -199,6 +199,10 @@ export function parseBaseConfig(content: string, basesFilePath: string): BaseCon
           foundColumns = view.order
             .map((c: any) => String(c).trim().replace(/^note\.|^file\./, ''))
             .filter(Boolean);
+        } else if (!foundColumns && Array.isArray(view.columns)) {
+          foundColumns = view.columns
+            .map((c: any) => String(c).trim().replace(/^note\.|^file\./, ''))
+            .filter(Boolean);
         }
         if (!rawProperty && view.property) {
           rawProperty = String(view.property).trim();

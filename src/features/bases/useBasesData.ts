@@ -305,12 +305,53 @@ export function useBasesData(
     loadData();
   }, [loadData]);
 
-  // Discover all possible columns from loaded rows
+  // Helper to match a column name from config with BaseColumn
+  const matchesColumn = useCallback((configCol: string, col: BaseColumn): boolean => {
+    const normConfig = configCol.toLowerCase().trim().replace(/^note\.|^file\./, '');
+    const normId = col.id.toLowerCase().trim();
+    const normLabel = col.label.toLowerCase().trim();
+
+    // 1. Direct match with ID or label
+    if (normConfig === normId || normConfig === normLabel) return true;
+
+    // 2. File column
+    if (col.type === 'file') {
+      return normConfig === 'file' || normConfig === 'ファイル名';
+    }
+
+    // 3. Frontmatter column (e.g. config: "status" matches col.id "fm:status")
+    if (col.type === 'frontmatter') {
+      const rawKey = normId.replace(/^fm:/, '');
+      return normConfig === rawKey || normConfig === `fm:${rawKey}`;
+    }
+
+    // 4. Heading column (e.g. config: "## 📍 現在地" or "📍 現在地" matches col.id "heading:## 📍 現在地")
+    if (col.type === 'heading') {
+      const rawHeading = normId.replace(/^heading:/, '');
+      const cleanHeading = rawHeading.replace(/^#+\s*/, '').trim();
+      const cleanConfig = normConfig.replace(/^#+\s*/, '').trim();
+      return (
+        normConfig === rawHeading ||
+        normConfig === cleanHeading ||
+        cleanConfig === cleanHeading ||
+        normConfig === `heading:${rawHeading}`
+      );
+    }
+
+    // 5. Property column (YAML mode)
+    if (col.type === 'property') {
+      return normConfig === normId;
+    }
+
+    return false;
+  }, []);
+
+  // Discover all possible columns from loaded rows (maintaining natural appearance order)
   const allColumns = useMemo<BaseColumn[]>(() => {
     const rows = Array.from(rowsMap.values());
     if (rows.length === 0) return [];
 
-    // 1. YAML Target Mode: collect property keys
+    // 1. YAML Target Mode: collect property keys in natural appearance order
     if (config.targetType === 'yaml') {
       const propertyKeys = new Set<string>();
       for (const row of rows) {
@@ -318,23 +359,13 @@ export function useBasesData(
         Object.keys(props).forEach((k) => propertyKeys.add(k));
       }
 
-      const keyOrder = Array.from(propertyKeys);
-      keyOrder.sort((a, b) => {
-        const priorityKeys = ['id', 'name', 'title', 'key'];
-        const pA = priorityKeys.indexOf(a.toLowerCase());
-        const pB = priorityKeys.indexOf(b.toLowerCase());
-        if (pA !== -1 && pB !== -1) return pA - pB;
-        if (pA !== -1) return -1;
-        if (pB !== -1) return 1;
-        return a.localeCompare(b, 'ja');
-      });
-
-      return keyOrder.map((key) => ({
+      // Preserve natural order from YAML data
+      return Array.from(propertyKeys).map((key) => ({
         id: key,
         label: key,
         type: 'property',
         isVisible: true,
-        isEditable: false, // will be computed in columns useMemo
+        isEditable: false,
       }));
     }
 
@@ -353,8 +384,8 @@ export function useBasesData(
       { id: 'file', label: 'ファイル名', type: 'file', isVisible: true, isEditable: false },
     ];
 
-    // Frontmatter columns
-    Array.from(fmKeys).sort().forEach((key) => {
+    // Frontmatter columns in natural appearance order
+    Array.from(fmKeys).forEach((key) => {
       cols.push({
         id: `fm:${key}`,
         label: key,
@@ -432,41 +463,107 @@ export function useBasesData(
     [config.editableColumns, config.isEditableByDefault]
   );
 
-  // Apply visibility and isEditable based on config.columns or user override
+  // Apply order, visibility and isEditable strictly based on config.columns or user override
   const columns = useMemo<BaseColumn[]>(() => {
-    return allColumns.map((col) => {
-      const isEditable = isColumnEditable(col);
-      let isVisible = true;
+    if (allColumns.length === 0) return [];
 
-      if (typeof visibleColumnsMap[col.id] === 'boolean') {
-        isVisible = visibleColumnsMap[col.id];
-      } else if (config.columns && config.columns.length > 0) {
-        if (col.type === 'file') {
-          isVisible = true;
+    let orderedColumns: BaseColumn[] = [];
+
+    if (config.columns && config.columns.length > 0) {
+      const usedColIds = new Set<string>();
+
+      // 1. In folder mode, if 'file' column is not explicitly in config.columns,
+      // prepend 'file' so user can still see file names and navigate
+      const hasFileInConfig = config.columns.some((c) => {
+        const norm = c.toLowerCase().trim().replace(/^note\.|^file\./, '');
+        return norm === 'file' || norm === 'ファイル名';
+      });
+
+      const fileCol = allColumns.find((c) => c.type === 'file');
+      if (fileCol && !hasFileInConfig && config.targetType === 'folder') {
+        const isEditable = isColumnEditable(fileCol);
+        const isVisible = visibleColumnsMap[fileCol.id] ?? true;
+        orderedColumns.push({ ...fileCol, isVisible, isEditable });
+        usedColIds.add(fileCol.id);
+      }
+
+      // 2. Add columns strictly in the exact order specified in config.columns
+      for (const confCol of config.columns) {
+        const matchedCol = allColumns.find((col) => matchesColumn(confCol, col));
+        if (matchedCol) {
+          if (!usedColIds.has(matchedCol.id)) {
+            const isEditable = isColumnEditable(matchedCol);
+            const isVisible = visibleColumnsMap[matchedCol.id] ?? true;
+            orderedColumns.push({ ...matchedCol, isVisible, isEditable });
+            usedColIds.add(matchedCol.id);
+          }
         } else {
-          isVisible = config.columns.some((c) => {
-            const normC = c.toLowerCase().trim();
-            const normLabel = col.label.toLowerCase().trim();
-            return normC === normLabel || normC === col.id.toLowerCase();
-          });
+          // If the column defined in YAML is not yet in allColumns,
+          // create a placeholder column to preserve definition order
+          const cleanName = confCol.replace(/^note\.|^file\./, '').trim();
+          const isHeading = cleanName.startsWith('#');
+          const placeholderId =
+            config.targetType === 'yaml'
+              ? cleanName
+              : isHeading
+              ? `heading:${cleanName}`
+              : `fm:${cleanName}`;
+
+          if (!usedColIds.has(placeholderId)) {
+            const newCol: BaseColumn = {
+              id: placeholderId,
+              label: cleanName,
+              type: config.targetType === 'yaml' ? 'property' : isHeading ? 'heading' : 'frontmatter',
+              isVisible: visibleColumnsMap[placeholderId] ?? true,
+              isEditable: false,
+            };
+            newCol.isEditable = isColumnEditable(newCol);
+            orderedColumns.push(newCol);
+            usedColIds.add(placeholderId);
+          }
         }
       }
 
-      return { ...col, isVisible, isEditable };
-    });
-  }, [allColumns, config.columns, visibleColumnsMap, isColumnEditable]);
+      // 3. Append remaining columns that were not listed in config.columns
+      // (Hidden by default, available in Column Picker)
+      for (const col of allColumns) {
+        if (!usedColIds.has(col.id)) {
+          const isEditable = isColumnEditable(col);
+          const isVisible = visibleColumnsMap[col.id] ?? false;
+          orderedColumns.push({ ...col, isVisible, isEditable });
+          usedColIds.add(col.id);
+        }
+      }
+    } else {
+      // No config.columns specified: use allColumns in natural discovered order
+      orderedColumns = allColumns.map((col) => {
+        const isEditable = isColumnEditable(col);
+        const isVisible = visibleColumnsMap[col.id] ?? true;
+        return { ...col, isVisible, isEditable };
+      });
+    }
+
+    return orderedColumns;
+  }, [allColumns, config.columns, config.targetType, visibleColumnsMap, isColumnEditable, matchesColumn]);
 
   // Auto-set initial sortColumn if not set
   useEffect(() => {
-    if (!sortColumn && allColumns.length > 0) {
+    if (!sortColumn && columns.length > 0) {
+      if (config.sortBy) {
+        const matched = columns.find((c) => matchesColumn(config.sortBy!, c));
+        if (matched) {
+          setSortColumn(matched.id);
+          return;
+        }
+      }
       if (config.targetType === 'yaml') {
-        const idCol = allColumns.find((c) => ['id', 'name', 'title'].includes(c.id.toLowerCase()));
-        setSortColumn(idCol ? idCol.id : allColumns[0].id);
+        const idCol = columns.find((c) => ['id', 'name', 'title'].includes(c.id.toLowerCase()));
+        setSortColumn(idCol ? idCol.id : columns[0].id);
       } else {
         setSortColumn('file');
       }
     }
-  }, [sortColumn, allColumns, config.targetType]);
+  }, [sortColumn, columns, config.targetType, config.sortBy, matchesColumn]);
 
   // Sort and filter rows
   const sortedAndFilteredRows = useMemo(() => {
@@ -518,6 +615,14 @@ export function useBasesData(
         } else if (sortColumn.startsWith('heading:')) {
           const key = sortColumn.replace('heading:', '');
           valA = a.headings[key] ?? '';
+        } else {
+          if (a.frontmatter && a.frontmatter[sortColumn] !== undefined) {
+            valA = a.frontmatter[sortColumn] ?? '';
+            valB = b.frontmatter[sortColumn] ?? '';
+          } else if (a.headings && a.headings[sortColumn] !== undefined) {
+            valA = a.headings[sortColumn] ?? '';
+            valB = b.headings[sortColumn] ?? '';
+          }
         }
       }
 
