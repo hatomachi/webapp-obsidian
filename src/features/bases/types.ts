@@ -17,6 +17,7 @@ export interface BaseRow {
   name: string;
   frontmatter: Record<string, any>;
   headings: Record<string, string>;
+  rawHeadings?: Record<string, string>;
   properties?: Record<string, any>;
   index?: number;
   rawContent?: string;

@@ -5,6 +5,7 @@ import {
   X,
   Loader2,
   Plus,
+  Heading,
 } from 'lucide-react';
 import { BaseRow, BaseColumn } from './types';
 
@@ -314,7 +315,69 @@ export const EditableCell: React.FC<EditableCellProps> = ({
       );
     }
 
-    // 4. Default Text / Number / General editing
+    // 4. Heading body section editing (multiline markdown editor)
+    if (col.type === 'heading') {
+      return (
+        <div
+          className="p-2 bg-zinc-900 border border-purple-500/70 rounded-lg shadow-2xl min-w-[280px] sm:min-w-[380px] max-w-lg z-30 space-y-2 animate-in fade-in zoom-in-95 duration-100"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between text-xs pb-1 border-b border-zinc-800">
+            <span className="font-semibold text-purple-300 flex items-center gap-1.5 truncate">
+              <Heading className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <span className="truncate">{col.label} 本文を編集</span>
+            </span>
+            <button
+              type="button"
+              onClick={cancelEditing}
+              className="text-zinc-500 hover:text-zinc-300 p-0.5 rounded"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <textarea
+            ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+            rows={5}
+            value={draftValue}
+            onChange={(e) => setDraftValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                handleSave();
+              }
+              if (e.key === 'Escape') cancelEditing();
+            }}
+            placeholder="見出し配下のMarkdown本文を入力..."
+            className="w-full bg-zinc-950 border border-zinc-700/80 rounded-md p-2 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500 font-mono leading-relaxed resize-y min-h-[100px]"
+          />
+
+          <div className="flex items-center justify-between pt-1 border-t border-zinc-800">
+            <span className="text-[10px] text-zinc-500">
+              Ctrl+Enter (⌘+Enter) で保存
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={cancelEditing}
+                className="px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSave()}
+                className="px-3 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium flex items-center gap-1 shadow"
+              >
+                <Check className="w-3.5 h-3.5" />
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 5. Default Text / Number / General editing
     const isMultiLine = typeof draftValue === 'string' && draftValue.length > 50;
 
     return (

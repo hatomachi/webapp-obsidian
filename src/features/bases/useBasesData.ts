@@ -3,7 +3,7 @@ import YAML from 'yaml';
 import { VaultConfig } from '../../types';
 import { GitService } from '../../services/GitService';
 import { BaseConfig, BaseRow, BaseColumn } from './types';
-import { parseBaseConfig, extractFrontmatter, extractHeadingsData } from './basesParser';
+import { parseBaseConfig, extractFrontmatter, extractHeadingsData, cleanHeadingContent } from './basesParser';
 import { saveBaseProperty } from './basesUpdater';
 
 interface UseBasesDataReturn {
@@ -94,13 +94,14 @@ export function useBasesData(
     const fileName = filePath.split('/').pop() || filePath;
     const cleanName = fileName.replace(/\.(md|markdown)$/i, '');
     const frontmatter = extractFrontmatter(content);
-    const headings = extractHeadingsData(content);
+    const { headings, rawHeadings } = extractHeadingsData(content);
 
     return {
       path: filePath,
       name: cleanName,
       frontmatter,
       headings,
+      rawHeadings,
       rawContent: content,
     };
   }, []);
@@ -384,14 +385,45 @@ export function useBasesData(
   // Check if a specific column is editable based on config
   const isColumnEditable = useCallback(
     (col: BaseColumn): boolean => {
-      if (col.type === 'file' || col.type === 'heading') return false;
-      const propName = col.type === 'frontmatter' ? col.id.replace(/^fm:/, '') : col.id;
+      if (col.type === 'file') return false;
 
+      // 1. Frontmatter column
+      if (col.type === 'frontmatter') {
+        const propName = col.id.replace(/^fm:/, '');
+        if (config.editableColumns !== undefined) {
+          const normProp = propName.toLowerCase().trim();
+          return config.editableColumns.some((c) => {
+            const normC = c.toLowerCase().trim();
+            return normC === normProp || normC === col.id.toLowerCase().trim();
+          });
+        }
+        return config.isEditableByDefault ?? true;
+      }
+
+      // 2. Heading body section column
+      if (col.type === 'heading') {
+        const headingKey = col.id.replace(/^heading:/, '');
+        const cleanHeading = headingKey.replace(/^#+\s*/, '').trim();
+        if (config.editableColumns !== undefined) {
+          return config.editableColumns.some((c) => {
+            const normC = c.toLowerCase().trim();
+            return (
+              normC === headingKey.toLowerCase().trim() ||
+              normC === cleanHeading.toLowerCase().trim() ||
+              normC === col.id.toLowerCase().trim() ||
+              normC === col.label.toLowerCase().trim()
+            );
+          });
+        }
+        return config.isEditableByDefault ?? true;
+      }
+
+      // 3. Property column (YAML mode)
       if (config.editableColumns !== undefined) {
-        const normProp = propName.toLowerCase().trim();
+        const normProp = col.id.toLowerCase().trim();
         return config.editableColumns.some((c) => {
           const normC = c.toLowerCase().trim();
-          return normC === normProp || normC === col.id.toLowerCase().trim();
+          return normC === normProp;
         });
       }
 
@@ -526,14 +558,18 @@ export function useBasesData(
   const updateCellProperty = useCallback(
     async (row: BaseRow, columnId: string, newValue: any): Promise<boolean> => {
       const cellKey = `${row.path}:${row.index ?? ''}:${columnId}`;
-      const propKey = columnId.startsWith('fm:') ? columnId.replace(/^fm:/, '') : columnId;
+      const isHeading = columnId.startsWith('heading:');
+      const headingKey = isHeading ? columnId.replace(/^heading:/, '') : '';
+      const propKey = isHeading ? headingKey : (columnId.startsWith('fm:') ? columnId.replace(/^fm:/, '') : columnId);
 
       // 1. Snapshot previous state for rollback
       const rowId = config.targetType === 'yaml' ? `${row.path}#${(row.index ?? 1) - 1}` : row.path;
       const prevRow = rowsMap.get(rowId);
       if (!prevRow) return false;
 
-      const prevValue = config.targetType === 'yaml'
+      const prevValue = isHeading
+        ? (prevRow.rawHeadings ? prevRow.rawHeadings[headingKey] : prevRow.headings[headingKey])
+        : config.targetType === 'yaml'
         ? (prevRow.properties ? prevRow.properties[propKey] : prevRow.frontmatter[propKey])
         : prevRow.frontmatter[propKey];
 
@@ -547,14 +583,25 @@ export function useBasesData(
         const next = new Map(prev);
         const target = next.get(rowId);
         if (target) {
-          const nextRow: BaseRow = {
-            ...target,
-            frontmatter: { ...target.frontmatter, [propKey]: newValue },
-            properties: target.properties ? { ...target.properties, [propKey]: newValue } : undefined,
-          };
-          // Also update display name if name/title was edited
-          if (['name', 'title'].includes(propKey.toLowerCase())) {
-            nextRow.name = String(newValue);
+          let nextRow: BaseRow;
+          if (isHeading) {
+            const rawVal = String(newValue ?? '');
+            const previewVal = cleanHeadingContent(rawVal.split('\n'));
+            nextRow = {
+              ...target,
+              headings: { ...target.headings, [headingKey]: previewVal },
+              rawHeadings: { ...(target.rawHeadings || {}), [headingKey]: rawVal },
+            };
+          } else {
+            nextRow = {
+              ...target,
+              frontmatter: { ...target.frontmatter, [propKey]: newValue },
+              properties: target.properties ? { ...target.properties, [propKey]: newValue } : undefined,
+            };
+            // Also update display name if name/title was edited
+            if (['name', 'title'].includes(propKey.toLowerCase())) {
+              nextRow.name = String(newValue);
+            }
           }
           next.set(rowId, nextRow);
         }
@@ -571,6 +618,7 @@ export function useBasesData(
           filePath: row.path,
           propertyKey: propKey,
           newValue,
+          columnType: isHeading ? 'heading' : (config.targetType === 'yaml' ? 'property' : 'frontmatter'),
           rowIndex,
           yamlProperty: config.property,
         });

@@ -446,12 +446,18 @@ function parseYamlValue(val: string): any {
   return unquoted;
 }
 
+export interface HeadingsExtractResult {
+  headings: Record<string, string>;
+  rawHeadings: Record<string, string>;
+}
+
 /**
- * Extract ## Headings and their corresponding immediate body/summary text
+ * Extract ## Headings and their corresponding immediate body/summary text as well as raw content
  */
-export function extractHeadingsData(content: string): Record<string, string> {
+export function extractHeadingsData(content: string): HeadingsExtractResult {
   const headings: Record<string, string> = {};
-  if (!content) return headings;
+  const rawHeadings: Record<string, string> = {};
+  if (!content) return { headings, rawHeadings };
 
   // Split lines
   const lines = content.split(/\r?\n/);
@@ -460,18 +466,21 @@ export function extractHeadingsData(content: string): Record<string, string> {
 
   const flushCurrent = () => {
     if (currentHeading && currentLines.length > 0) {
-      // Clean up body content: take meaningful content (e.g. non-empty lines, max 3 lines or checklist summary)
-      const text = cleanHeadingContent(currentLines);
-      if (text) {
-        headings[currentHeading] = text;
+      // 1. Raw text (preserves original formatting and line breaks, trimmed at outer boundaries)
+      const rawText = currentLines.join('\n').trim();
+      if (rawText) {
+        rawHeadings[currentHeading] = rawText;
+      }
+      // 2. Preview text
+      const previewText = cleanHeadingContent(currentLines.map((l) => l.trim()));
+      if (previewText) {
+        headings[currentHeading] = previewText;
       }
       currentLines.length = 0;
     }
   };
 
   for (const line of lines) {
-    const trimmed = line.trim();
-
     // Check for H2 or H3 heading (e.g. "## 📍 現在地" or "### 目標")
     const headingMatch = line.match(/^(#{2,3})\s+(.+)$/);
     if (headingMatch) {
@@ -492,18 +501,18 @@ export function extractHeadingsData(content: string): Record<string, string> {
     }
 
     if (currentHeading) {
-      currentLines.push(trimmed);
+      currentLines.push(line);
     }
   }
 
   flushCurrent();
-  return headings;
+  return { headings, rawHeadings };
 }
 
 /**
  * Helper to clean heading content into a readable preview string or checklist summary
  */
-function cleanHeadingContent(lines: string[]): string {
+export function cleanHeadingContent(lines: string[]): string {
   const nonEmpty = lines.filter((l) => l && !l.startsWith('>')); // exclude blockquotes if needed, or keep
   if (nonEmpty.length === 0) return '';
 

@@ -584,6 +584,8 @@ export const BasesViewer: React.FC<BasesViewerProps> = ({
                         ? row.properties ? row.properties[col.id] : row.frontmatter[col.id]
                         : col.type === 'frontmatter'
                         ? row.frontmatter[col.id.replace('fm:', '')]
+                        : col.type === 'heading'
+                        ? (row.rawHeadings ? row.rawHeadings[col.id.replace('heading:', '')] : row.headings[col.id.replace('heading:', '')])
                         : undefined;
 
                     const cellKey = `${row.path}:${row.index ?? ''}:${col.id}`;
