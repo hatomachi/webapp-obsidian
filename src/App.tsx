@@ -10,6 +10,7 @@ import { MarkdownViewer } from './components/MarkdownViewer/MarkdownViewer';
 import { PlainTextViewer } from './components/TextViewer/PlainTextViewer';
 import { BinaryViewer } from './components/BinaryViewer/BinaryViewer';
 import { BasesViewer, isBasesFile } from './features/bases';
+import { MinutesViewer, isMinutesFile } from './features/minutes';
 import { VaultManager } from './services/VaultManager';
 import { GitService } from './services/GitService';
 import { VaultConfig, FileNode, UIPreferences, TextEncoding } from './types';
@@ -911,6 +912,15 @@ export const App: React.FC = () => {
               rawBase64={rawBase64}
               size={fileSize}
             />
+          ) : isMinutesFile(activeFilePath, content) ? (
+            <MinutesViewer
+              vault={activeVault}
+              filePath={activeFilePath}
+              content={content}
+              allFilePaths={allFilePaths}
+              onNavigateFile={safeNavigateFile}
+              onOpenEditModal={() => setIsEditModalOpen(true)}
+            />
           ) : isBasesFile(activeFilePath, content) ? (
             <BasesViewer
               vault={activeVault}
@@ -967,7 +977,7 @@ export const App: React.FC = () => {
       )}
 
       {/* Quick Append Bar (Sticky at bottom for mobile, only for markdown notes) */}
-      {!fileIsBinary && !isBasesFile(activeFilePath, content) && activeVault && activeFilePath && (activeFilePath.toLowerCase().endsWith('.md') || activeFilePath.toLowerCase().endsWith('.markdown')) && (
+      {!fileIsBinary && !isBasesFile(activeFilePath, content) && !isMinutesFile(activeFilePath, content) && activeVault && activeFilePath && (activeFilePath.toLowerCase().endsWith('.md') || activeFilePath.toLowerCase().endsWith('.markdown')) && (
         <div className="fixed bottom-0 left-0 right-0 z-20 bg-obsidian-sidebar/95 backdrop-blur-md border-t border-obsidian-border p-2 safe-bottom select-none">
           <form
             onSubmit={handleQuickAppend}

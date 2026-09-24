@@ -55,12 +55,16 @@ webapp-obsidian/
 ├── docs/
 │   ├── ARCHITECTURE_AND_CONCEPT.md            # 詳細設計思想・セキュリティ仕様書
 │   ├── DEPLOY_TO_CLOUDFLARE_PAGES.md          # Cloudflare Pages デプロイ手順書
-│   └── BASES_GUIDE.md                         # 【必読】Bases機能・フォーマット完全仕様ガイド（AI・開発者向け）
+│   ├── BASES_GUIDE.md                         # 【必読】Bases機能・フォーマット完全仕様ガイド（AI・開発者向け）
+│   └── MINUTES_GUIDE.md                       # 【必読】議事録ビューア機能・フォーマット完全仕様ガイド
 ├── public/
 │   ├── manifest.webmanifest                    # PWA マニフェスト設定
 │   └── obsidian.svg                            # アプリアイコン
 └── src/
     ├── types/index.ts                          # VaultConfig, FileNode, TOCItem, SearchResult
+    ├── features/                               # 完全疎結合の拡張プラグイン群
+    │   ├── bases/                              # Bases機能 (表形式データベースビューア＆直接編集)
+    │   └── minutes/                            # 議事録ビューア機能 (音声/Whisper文字起こし/スクショ/議事録)
     ├── services/
     │   ├── GitHubService.ts                    # Octokit による Git Trees, Contents API, キャッシュ, コミット
     │   └── VaultManager.ts                     # 複数Vaultの追加・切替・永続化
