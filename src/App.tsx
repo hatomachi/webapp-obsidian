@@ -11,6 +11,14 @@ import { PlainTextViewer } from './components/TextViewer/PlainTextViewer';
 import { BinaryViewer } from './components/BinaryViewer/BinaryViewer';
 import { BasesViewer, isBasesFile } from './features/bases';
 import { MinutesViewer, isMinutesFile } from './features/minutes';
+import {
+  AiRemoteChatDrawer,
+  ErrorBoundary,
+  AiRemoteSettings,
+  loadAiRemoteSettings,
+  saveAiRemoteSettings,
+  formatCurrentNoteToAttachment,
+} from './features/ai';
 import { VaultManager } from './services/VaultManager';
 import { GitService } from './services/GitService';
 import { VaultConfig, FileNode, UIPreferences, TextEncoding } from './types';
@@ -92,6 +100,15 @@ export const App: React.FC = () => {
   const [isQuickSwitcherOpen, setIsQuickSwitcherOpen] = useState<boolean>(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isAiChatOpen, setIsAiChatOpen] = useState<boolean>(false);
+
+  // AI Remote Settings
+  const [aiSettings, setAiSettings] = useState<AiRemoteSettings>(() => loadAiRemoteSettings());
+
+  const handleUpdateAiSettings = useCallback((newSettings: AiRemoteSettings) => {
+    setAiSettings(newSettings);
+    saveAiRemoteSettings(newSettings);
+  }, []);
 
   const showToast = (text: string, type: 'info' | 'success' | 'error' = 'info') => {
     setToastMessage({ text, type });
@@ -780,6 +797,23 @@ export const App: React.FC = () => {
     return extractTitle(content, activeFilePath.split('/').pop() || '');
   }, [content, activeFilePath]);
 
+  // Context attachment for AI Remote Chat
+  const getCurrentContextAttachment = useCallback(() => {
+    if (!activeFilePath || fileIsBinary || !content) return null;
+    return formatCurrentNoteToAttachment({
+      filePath: activeFilePath,
+      title: currentTitle,
+      content,
+      vaultName: activeVault?.name,
+    });
+  }, [activeFilePath, fileIsBinary, currentTitle, content, activeVault?.name]);
+
+  // Apply draft text to quick note input bar
+  const handleApplyDraftToAppend = useCallback((text: string) => {
+    setQuickNoteText((prev) => (prev ? `${prev}\n${text}` : text));
+    showToast('クイック追記バーにセットしました', 'success');
+  }, []);
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-obsidian-bg text-obsidian-text">
       {/* Toast Notification */}
@@ -809,6 +843,8 @@ export const App: React.FC = () => {
             showToast('バイナリファイルは編集できません', 'error');
           }
         }}
+        onOpenAiChat={() => setIsAiChatOpen((prev) => !prev)}
+        isAiChatOpen={isAiChatOpen}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onRefresh={async () => {
           if (activeVault) {
@@ -1061,7 +1097,25 @@ export const App: React.FC = () => {
         onClearCache={handleClearCache}
         uiPrefs={uiPrefs}
         onUpdateUIPrefs={handleUpdateUIPrefs}
+        aiSettings={aiSettings}
+        onUpdateAiSettings={handleUpdateAiSettings}
       />
+
+      {/* AI Remote Wall-Bounce Chat Drawer with Crash Safeguard */}
+      <ErrorBoundary fallbackTitle="AI壁打ちドロワーでエラーが発生しました">
+        <AiRemoteChatDrawer
+          isOpen={isAiChatOpen}
+          onClose={() => setIsAiChatOpen(false)}
+          settings={aiSettings}
+          topicTitle={currentTitle || (activeFilePath ? activeFilePath.split('/').pop() || '' : 'Obsidian')}
+          getCurrentContextAttachment={getCurrentContextAttachment}
+          onApplyDraftToAppend={handleApplyDraftToAppend}
+          onOpenSettings={() => {
+            setIsAiChatOpen(false);
+            setIsSettingsOpen(true);
+          }}
+        />
+      </ErrorBoundary>
     </div>
   );
 };

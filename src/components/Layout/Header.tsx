@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   Languages,
+  Bot,
 } from 'lucide-react';
 import { VaultConfig, TextEncoding } from '../../types';
 
@@ -23,6 +24,8 @@ interface HeaderProps {
   onOpenQuickSwitcher: () => void;
   onOpenEditModal: () => void;
   onOpenSettings: () => void;
+  onOpenAiChat?: () => void;
+  isAiChatOpen?: boolean;
   onRefresh: () => void;
   isRefreshing?: boolean;
   isSidebarOpen?: boolean;
@@ -48,6 +51,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenQuickSwitcher,
   onOpenEditModal,
   onOpenSettings,
+  onOpenAiChat,
+  isAiChatOpen = false,
   onRefresh,
   isRefreshing = false,
   isSidebarOpen = false,
@@ -234,6 +239,23 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <ListTree className="w-4 h-4" />
         </button>
+
+        {/* AI Remote Chat */}
+        {onOpenAiChat && (
+          <button
+            type="button"
+            onClick={onOpenAiChat}
+            aria-label="AI Remote Chat"
+            title="AI壁打ち (Claude / Copilot)"
+            className={`p-2 rounded-lg transition-all active:scale-95 ${
+              isAiChatOpen
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 shadow-sm'
+                : 'text-zinc-300 hover:text-white hover:bg-obsidian-hover'
+            }`}
+          >
+            <Bot className="w-4 h-4" />
+          </button>
+        )}
 
         {/* Edit Note */}
         <button

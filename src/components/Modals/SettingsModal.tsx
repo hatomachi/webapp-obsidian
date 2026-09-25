@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Plus,
@@ -12,9 +12,13 @@ import {
   ChevronDown,
   ChevronRight,
   Sliders,
+  Bot,
+  Key,
+  RefreshCw,
 } from 'lucide-react';
 import { VaultConfig, UIPreferences, GitProvider } from '../../types';
 import { GitService } from '../../services/GitService';
+import { AiRemoteSettings, deriveHttpUrls } from '../../features/ai';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -28,6 +32,8 @@ interface SettingsModalProps {
   onClearCache: (owner: string, repo: string, provider?: string) => void;
   uiPrefs: UIPreferences;
   onUpdateUIPrefs: (prefs: UIPreferences) => void;
+  aiSettings?: AiRemoteSettings;
+  onUpdateAiSettings?: (settings: AiRemoteSettings) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -42,9 +48,186 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClearCache,
   uiPrefs,
   onUpdateUIPrefs,
+  aiSettings,
+  onUpdateAiSettings,
 }) => {
   const [isAdding, setIsAdding] = useState(vaults.length === 0);
   const [editingVaultId, setEditingVaultId] = useState<string | null>(null);
+
+  // AI Remote Settings State
+  const [aiHubUrl, setAiHubUrl] = useState(aiSettings?.hubUrl || 'ws://localhost:8090/ws/client');
+  const [aiToken, setAiToken] = useState(aiSettings?.authToken || '');
+  const [aiEngine, setAiEngine] = useState<'claude' | 'copilot'>(aiSettings?.engine || 'claude');
+  const [aiModel, setAiModel] = useState(aiSettings?.model || 'claude-opus-4-7');
+  const [aiTransportMode, setAiTransportMode] = useState<'auto' | 'ws' | 'http'>(aiSettings?.transportMode || 'auto');
+  const [isAiTesting, setIsAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Sync internal state when external aiSettings changes
+  useEffect(() => {
+    if (aiSettings) {
+      setAiHubUrl(aiSettings.hubUrl);
+      setAiToken(aiSettings.authToken);
+      setAiEngine(aiSettings.engine);
+      setAiModel(aiSettings.model);
+      setAiTransportMode(aiSettings.transportMode);
+    }
+  }, [aiSettings]);
+
+  const handleSaveAiSettings = (newConfig?: Partial<AiRemoteSettings>) => {
+    if (!onUpdateAiSettings) return;
+    const updated: AiRemoteSettings = {
+      hubUrl: newConfig?.hubUrl !== undefined ? newConfig.hubUrl : aiHubUrl,
+      authToken: newConfig?.authToken !== undefined ? newConfig.authToken : aiToken,
+      engine: newConfig?.engine !== undefined ? newConfig.engine : aiEngine,
+      model: newConfig?.model !== undefined ? newConfig.model : aiModel,
+      transportMode: newConfig?.transportMode !== undefined ? newConfig.transportMode : aiTransportMode,
+    };
+    onUpdateAiSettings(updated);
+  };
+
+  const handleTestAiConnection = async () => {
+    const hubUrl = (aiHubUrl || 'ws://localhost:8090/ws/client').trim();
+    const token = (aiToken || '').trim();
+
+    if (!token) {
+      setAiTestResult({
+        success: false,
+        message: '認証トークン (Auth Key) が未入力です。社内PCで start-agent 起動時に表示された UUID を入力してください。',
+      });
+      return;
+    }
+
+    setIsAiTesting(true);
+    setAiTestResult(null);
+
+    const transportMode = aiTransportMode || 'auto';
+
+    // 1. HTTP メッセージエンドポイント (POST .../message?token=...) を試行
+    if (transportMode === 'http' || transportMode === 'auto') {
+      try {
+        const { messageUrl } = deriveHttpUrls(hubUrl, token);
+        const postRes = await fetch(messageUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'get_status' }),
+          signal: AbortSignal.timeout(4000),
+        });
+
+        if (postRes.ok) {
+          setAiTestResult({
+            success: true,
+            message: 'HTTP (SSE+POST) 接続成功: ✅ 社内PC Bridge Agent 接続中',
+          });
+          setIsAiTesting(false);
+          return;
+        }
+
+        if (postRes.status === 503) {
+          setAiTestResult({
+            success: true,
+            message: 'HTTP (SSE+POST) 疎通成功: ⚠️ Relay Hub は到達可能ですが、PC側の start-agent が起動していません',
+          });
+          setIsAiTesting(false);
+          return;
+        }
+
+        if (postRes.status === 401) {
+          setAiTestResult({
+            success: false,
+            message: '認証エラー (HTTP 401): 認証トークン (Auth Key) が正しくありません。PC側のログを確認してください',
+          });
+          setIsAiTesting(false);
+          return;
+        }
+      } catch (httpErr: any) {
+        console.warn('HTTP POST test failed:', httpErr);
+        if (transportMode === 'http') {
+          setAiTestResult({
+            success: false,
+            message: `HTTP (SSE+POST) 接続失敗: ${httpErr.message || 'Hub にアクセスできません'}`,
+          });
+          setIsAiTesting(false);
+          return;
+        }
+      }
+    }
+
+    // 2. WebSocket 接続テスト (ws / wss)
+    try {
+      let wsUrl = hubUrl;
+      if (wsUrl.startsWith('http://')) wsUrl = 'ws://' + wsUrl.slice(7);
+      else if (wsUrl.startsWith('https://')) wsUrl = 'wss://' + wsUrl.slice(8);
+      else if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+        const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+        wsUrl = `${isHttps ? 'wss:' : 'ws:'}//${wsUrl}`;
+      }
+      const parsed = new URL(wsUrl);
+      if (!parsed.pathname || parsed.pathname === '/') parsed.pathname = '/ws/client';
+      if (token) parsed.searchParams.set('token', token);
+
+      const ws = new WebSocket(parsed.toString());
+
+      const timeoutId = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {}
+        setAiTestResult({
+          success: false,
+          message: 'WebSocket接続タイムアウト: Hub が応答しないか、プロキシ等でWSが遮断されている可能性があります',
+        });
+        setIsAiTesting(false);
+      }, 4000);
+
+      ws.onopen = () => {
+        clearTimeout(timeoutId);
+        ws.send(JSON.stringify({ type: 'get_status' }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          clearTimeout(timeoutId);
+          ws.close();
+          if (msg.agentConnected) {
+            setAiTestResult({
+              success: true,
+              message: 'WebSocket接続成功: ✅ 社内PC Bridge Agent 接続中',
+            });
+          } else {
+            setAiTestResult({
+              success: true,
+              message: 'WebSocket接続成功: ⚠️ Relay Hub に接続しましたが、Agent が未接続です',
+            });
+          }
+        } catch {
+          setAiTestResult({
+            success: true,
+            message: 'WebSocket接続成功: Relay Hub と接続できました',
+          });
+        }
+        setIsAiTesting(false);
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeoutId);
+        try {
+          ws.close();
+        } catch {}
+        setAiTestResult({
+          success: false,
+          message: 'WebSocket接続エラー: 接続先URLやプロトコル (WS/WSS) を確認してください',
+        });
+        setIsAiTesting(false);
+      };
+    } catch (wsErr: any) {
+      setAiTestResult({
+        success: false,
+        message: `WebSocket接続初期化失敗: ${wsErr.message || 'URLが無効です'}`,
+      });
+      setIsAiTesting(false);
+    }
+  };
 
   // Form states
   const [provider, setProvider] = useState<GitProvider>('github');
@@ -670,6 +853,142 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </span>
                 </div>
               </label>
+            </div>
+          </div>
+
+          {/* AI Remote Hub Settings */}
+          <div className="pt-4 border-t border-zinc-800 space-y-3">
+            <div className="flex items-center space-x-2 text-zinc-200 font-semibold text-xs">
+              <Bot className="w-4 h-4 text-emerald-400" />
+              <span>AI Remote 壁打ち連携 (社内PC Bridge Agent 接続)</span>
+            </div>
+            <p className="text-xs text-zinc-500">
+              社内PCで稼働する Relay Hub 経由で Claude Code / Copilot CLI と対話できます。現在開いているノートをワンタップで添付し、要約・推敲・タスク抽出が行えます。
+            </p>
+
+            <div className="space-y-3 p-3.5 rounded-xl bg-zinc-950/50 border border-zinc-800">
+              {/* Hub URL */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">
+                  Relay Hub URL (WSS / WS)
+                </label>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    placeholder="ws://localhost:8090/ws/client または wss://..."
+                    value={aiHubUrl}
+                    onChange={(e) => {
+                      setAiHubUrl(e.target.value);
+                      handleSaveAiSettings({ hubUrl: e.target.value });
+                    }}
+                    className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestAiConnection}
+                    disabled={isAiTesting}
+                    className="flex items-center space-x-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-medium border border-zinc-600 transition-colors shrink-0"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isAiTesting ? 'animate-spin text-emerald-400' : ''}`} />
+                    <span>テスト</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Auth Token */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-200 mb-1 flex items-center space-x-1">
+                  <Key className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>認証トークン / Auth Key (Session Token)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="例: 550e8400-e29b-41d4-a716-446655440000"
+                  value={aiToken}
+                  onChange={(e) => {
+                    setAiToken(e.target.value);
+                    handleSaveAiSettings({ authToken: e.target.value });
+                  }}
+                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:border-emerald-500 font-mono"
+                />
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  社内PCで start-agent を起動した際にコンソールに表示される UUID を入力してください。
+                </p>
+              </div>
+
+              {/* Engine & Model & Transport */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <div>
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    AI Engine
+                  </label>
+                  <select
+                    value={aiEngine}
+                    onChange={(e) => {
+                      const val = e.target.value as 'claude' | 'copilot';
+                      setAiEngine(val);
+                      handleSaveAiSettings({ engine: val });
+                    }}
+                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 text-xs focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="claude">Claude Code (標準)</option>
+                    <option value="copilot">GitHub Copilot CLI</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    モデル (Model)
+                  </label>
+                  <input
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => {
+                      setAiModel(e.target.value);
+                      handleSaveAiSettings({ model: e.target.value });
+                    }}
+                    placeholder="claude-opus-4-7"
+                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 text-xs focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    通信プロトコル
+                  </label>
+                  <select
+                    value={aiTransportMode}
+                    onChange={(e) => {
+                      const val = e.target.value as 'auto' | 'ws' | 'http';
+                      setAiTransportMode(val);
+                      handleSaveAiSettings({ transportMode: val });
+                    }}
+                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 text-xs focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="auto">Auto (自動フォールバック)</option>
+                    <option value="ws">WebSocket のみ</option>
+                    <option value="http">HTTP (SSE+POST) のみ</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* AI Test Result Banner */}
+              {aiTestResult && (
+                <div
+                  className={`flex items-start gap-2 p-2.5 rounded-lg text-xs mt-2 ${
+                    aiTestResult.success
+                      ? 'bg-emerald-950/60 border border-emerald-800 text-emerald-300'
+                      : 'bg-rose-950/60 border border-rose-800 text-rose-300'
+                  }`}
+                >
+                  {aiTestResult.success ? (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                  )}
+                  <span className="leading-relaxed break-words">{aiTestResult.message}</span>
+                </div>
+              )}
             </div>
           </div>
 
